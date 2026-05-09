@@ -162,7 +162,7 @@ The local stack exposes:
 | Kibana through the gateway | `http://localhost:8080/kibana` |
 | GLAuth LDAP | `ldaps://localhost:1389` |
 
-Kibana is configured with `SERVER_BASEPATH=/kibana` and `SERVER_REWRITEBASEPATH=false`, so the gateway keeps `/kibana` public and strips that prefix before forwarding requests to Kibana.
+The gateway owns the public `/kibana` prefix and strips it before forwarding requests to Kibana.
 
 Default local passwords:
 

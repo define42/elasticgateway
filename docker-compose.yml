@@ -65,8 +65,6 @@ services:
         condition: service_completed_successfully
     environment:
       SERVER_NAME: kibana
-      SERVER_BASEPATH: /kibana
-      SERVER_REWRITEBASEPATH: "false"
       ELASTICSEARCH_HOSTS: http://elasticsearch:9200
       ELASTICSEARCH_USERNAME: kibana_system
       ELASTICSEARCH_PASSWORD: ${KIBANA_SYSTEM_PASSWORD:-Kibana7!FluxOrbit29}
