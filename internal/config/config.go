@@ -26,6 +26,8 @@ const (
 	DefaultUsername = "elastic"
 	// DefaultSessionTTL is the default gateway session lifetime.
 	DefaultSessionTTL = 24 * time.Hour
+	// DefaultHTTPClientTimeout bounds upstream Elasticsearch and Kibana requests.
+	DefaultHTTPClientTimeout = 300 * time.Second
 	// MinSessionSecretLength is the minimum accepted SESSION_SECRET length.
 	MinSessionSecretLength = 32
 )
@@ -66,11 +68,25 @@ func DefaultHTTPClient() *http.Client {
 	client, err := defaultHTTPClient()
 	if err != nil {
 		return &http.Client{
-			Timeout:   30 * time.Second,
+			Timeout:   DefaultHTTPClientTimeout,
 			Transport: errorRoundTripper{err: err},
 		}
 	}
 	return client
+}
+
+// WithDefaultHTTPClientTimeout returns a client with a nonzero upstream timeout.
+func WithDefaultHTTPClientTimeout(client *http.Client) *http.Client {
+	if client == nil {
+		return DefaultHTTPClient()
+	}
+	if client.Timeout > 0 {
+		return client
+	}
+
+	clone := *client
+	clone.Timeout = DefaultHTTPClientTimeout
+	return &clone
 }
 
 func defaultHTTPClient() (*http.Client, error) {
@@ -86,7 +102,7 @@ func defaultHTTPClient() (*http.Client, error) {
 	}
 
 	return &http.Client{
-		Timeout:   30 * time.Second,
+		Timeout:   DefaultHTTPClientTimeout,
 		Transport: transport,
 	}, nil
 }

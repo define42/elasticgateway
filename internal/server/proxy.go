@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,8 +10,10 @@ import (
 	"net/http/httputil"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/define42/elasticgateway/internal/authz"
+	appconfig "github.com/define42/elasticgateway/internal/config"
 )
 
 func (g *Gateway) proxyKibana(w http.ResponseWriter, r *http.Request, sessionData Session) error {
@@ -19,6 +22,7 @@ func (g *Gateway) proxyKibana(w http.ResponseWriter, r *http.Request, sessionDat
 	}
 
 	proxy := &httputil.ReverseProxy{
+		Transport: g.kibanaProxyTransport(),
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(g.kibanaTarget)
 			pr.Out.URL.RawPath = ""
@@ -44,6 +48,66 @@ func (g *Gateway) proxyKibana(w http.ResponseWriter, r *http.Request, sessionDat
 
 	proxy.ServeHTTP(w, r)
 	return nil
+}
+
+func (g *Gateway) kibanaProxyTransport() http.RoundTripper {
+	timeout := appconfig.DefaultHTTPClientTimeout
+	transport := http.RoundTripper(http.DefaultTransport)
+
+	if g != nil && g.Client != nil && g.Client.Config.HTTPClient != nil {
+		client := g.Client.Config.HTTPClient
+		if client.Timeout > 0 {
+			timeout = client.Timeout
+		}
+		if client.Transport != nil {
+			transport = client.Transport
+		}
+	}
+
+	return timeoutRoundTripper{
+		base:    transport,
+		timeout: timeout,
+	}
+}
+
+type timeoutRoundTripper struct {
+	base    http.RoundTripper
+	timeout time.Duration
+}
+
+func (t timeoutRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
+	base := t.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	if t.timeout <= 0 {
+		return base.RoundTrip(req)
+	}
+
+	ctx, cancel := context.WithTimeout(req.Context(), t.timeout)
+	resp, err := base.RoundTrip(req.WithContext(ctx))
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	if resp.Body == nil {
+		cancel()
+		return resp, nil
+	}
+	resp.Body = &cancelOnCloseReadCloser{ReadCloser: resp.Body, cancel: cancel}
+	return resp, nil
+}
+
+type cancelOnCloseReadCloser struct {
+	io.ReadCloser
+
+	cancel context.CancelFunc
+}
+
+func (r *cancelOnCloseReadCloser) Close() error {
+	err := r.ReadCloser.Close()
+	r.cancel()
+	return err
 }
 
 func isKibanaUserProfilePath(path string) bool {

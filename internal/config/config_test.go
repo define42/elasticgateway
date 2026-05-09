@@ -22,7 +22,7 @@ func TestDefaultHTTPClient(t *testing.T) {
 	t.Setenv("ELASTICSEARCH_SKIP_TLS_VERIFY", "true")
 
 	client := DefaultHTTPClient()
-	if client.Timeout != 30*time.Second {
+	if client.Timeout != DefaultHTTPClientTimeout {
 		t.Fatalf("unexpected timeout: %v", client.Timeout)
 	}
 
@@ -32,6 +32,35 @@ func TestDefaultHTTPClient(t *testing.T) {
 	}
 	if transport.TLSClientConfig == nil || !transport.TLSClientConfig.InsecureSkipVerify {
 		t.Fatalf("expected TLS client config with InsecureSkipVerify, got %#v", transport.TLSClientConfig)
+	}
+}
+
+func TestWithDefaultHTTPClientTimeoutAddsTimeoutWithoutMutatingInput(t *testing.T) {
+	input := &http.Client{}
+
+	client := WithDefaultHTTPClientTimeout(input)
+
+	if client == input {
+		t.Fatal("expected timeout helper to clone no-timeout input client")
+	}
+	if client.Timeout != DefaultHTTPClientTimeout {
+		t.Fatalf("unexpected timeout: %v", client.Timeout)
+	}
+	if input.Timeout != 0 {
+		t.Fatalf("input client was mutated: %v", input.Timeout)
+	}
+}
+
+func TestWithDefaultHTTPClientTimeoutPreservesConfiguredTimeout(t *testing.T) {
+	input := &http.Client{Timeout: 7 * time.Second}
+
+	client := WithDefaultHTTPClientTimeout(input)
+
+	if client != input {
+		t.Fatal("expected configured-timeout client to be reused")
+	}
+	if client.Timeout != 7*time.Second {
+		t.Fatalf("unexpected timeout: %v", client.Timeout)
 	}
 }
 

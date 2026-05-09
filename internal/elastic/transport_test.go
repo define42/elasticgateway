@@ -75,3 +75,19 @@ func TestDoJSONWithRequestReturnsBuilderError(t *testing.T) {
 		t.Fatalf("expected builder error, got %v", err)
 	}
 }
+
+func TestNewClientAddsDefaultTimeoutToInjectedHTTPClient(t *testing.T) {
+	input := &http.Client{}
+
+	client := NewClient(config.Config{HTTPClient: input})
+
+	if client.Config.HTTPClient == input {
+		t.Fatal("expected no-timeout input client to be cloned")
+	}
+	if client.Config.HTTPClient.Timeout != config.DefaultHTTPClientTimeout {
+		t.Fatalf("unexpected timeout: %v", client.Config.HTTPClient.Timeout)
+	}
+	if input.Timeout != 0 {
+		t.Fatalf("input client was mutated: %v", input.Timeout)
+	}
+}

@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -551,6 +552,43 @@ func TestKibanaProxyUsesConstructedTargetURL(t *testing.T) {
 	}
 	if !proxied {
 		t.Fatal("expected request to reach constructed Kibana target")
+	}
+}
+
+func TestKibanaProxyTimesOutHungUpstream(t *testing.T) {
+	kibana := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer kibana.Close()
+
+	gateway := New(elasticpkg.NewClient(appconfig.Config{
+		KibanaURL: kibana.URL,
+		HTTPClient: &http.Client{
+			Timeout: 20 * time.Millisecond,
+		},
+	}), nil)
+	encoded, err := gateway.EncodeSessionCookieValue(Session{
+		User:       &authz.User{Name: "alice"},
+		AuthHeader: BuildBasicAuthorization("alice", "secret"),
+	})
+	if err != nil {
+		t.Fatalf("encode session cookie: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/kibana/app/home", nil)
+	ctx, cancel := context.WithTimeout(request.Context(), time.Second)
+	defer cancel()
+	request = request.WithContext(ctx)
+	request.AddCookie(&http.Cookie{Name: SessionCookieName, Value: encoded})
+
+	gateway.Handler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("expected status 502, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if body := recorder.Body.String(); !strings.Contains(body, upstreamErrorMessage) {
+		t.Fatalf("expected generic upstream error, got %q", body)
 	}
 }
 

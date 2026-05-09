@@ -196,8 +196,6 @@ func NewClient(cfg config.Config) *Client {
 }
 
 func normalizeConfig(cfg config.Config) config.Config {
-	if cfg.HTTPClient == nil {
-		cfg.HTTPClient = config.DefaultHTTPClient()
-	}
+	cfg.HTTPClient = config.WithDefaultHTTPClientTimeout(cfg.HTTPClient)
 	return cfg
 }
