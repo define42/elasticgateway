@@ -269,6 +269,15 @@ func TestDecodeIngestDocumentsReturnRequestEntityTooLargeAfterReadingPastLimit(t
 				return status, err
 			},
 		},
+		{
+			name:        "bulk malformed line before limit",
+			contentType: "application/x-ndjson",
+			body:        "{bad}\n" + strings.Repeat("x", 32),
+			decode: func(w http.ResponseWriter, r *http.Request) (int, error) {
+				_, status, err := decodeBulkIngestDocumentsWithLimit(w, r, "orders-demo", 8)
+				return status, err
+			},
+		},
 	}
 
 	for _, tt := range tests {

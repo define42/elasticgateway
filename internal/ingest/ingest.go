@@ -283,7 +283,7 @@ func DecodeBulkNDJSON(body io.Reader) ([]BulkDocument, error) {
 
 		action, metadata, err := parseBulkActionLine(actionLine)
 		if err != nil {
-			return nil, fmt.Errorf("bulk action line %d: %w", actionLineNumber, err)
+			return nil, finishBulkParseError(scanner, fmt.Errorf("bulk action line %d: %w", actionLineNumber, err))
 		}
 
 		sourceLine, sourceLineNumber, ok, err := nextNonEmptyBulkLine(scanner, &lineNumber)
@@ -296,7 +296,7 @@ func DecodeBulkNDJSON(body io.Reader) ([]BulkDocument, error) {
 
 		document, err := parseBulkSourceLine(sourceLine)
 		if err != nil {
-			return nil, fmt.Errorf("bulk source line %d: %w", sourceLineNumber, err)
+			return nil, finishBulkParseError(scanner, fmt.Errorf("bulk source line %d: %w", sourceLineNumber, err))
 		}
 		docs = append(docs, BulkDocument{
 			Action:   action,
@@ -313,6 +313,22 @@ func DecodeBulkNDJSON(body io.Reader) ([]BulkDocument, error) {
 		return nil, errors.New("bulk body must contain at least one action/source pair")
 	}
 	return docs, nil
+}
+
+func finishBulkParseError(scanner *bufio.Scanner, parseErr error) error {
+	if err := drainBulkScanner(scanner); err != nil {
+		return fmt.Errorf("%w: %w", parseErr, err)
+	}
+	return parseErr
+}
+
+func drainBulkScanner(scanner *bufio.Scanner) error {
+	for scanner.Scan() {
+	}
+	if err := scanner.Err(); err != nil {
+		return fmt.Errorf("read bulk body: %w", err)
+	}
+	return nil
 }
 
 func nextNonEmptyBulkLine(scanner *bufio.Scanner, lineNumber *int) (string, int, bool, error) {
