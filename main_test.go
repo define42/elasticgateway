@@ -2004,8 +2004,8 @@ func testConfig(server *httptest.Server) appconfig.Config {
 		KibanaUsername:        "elastic",
 		KibanaPassword:        "Admin123!",
 		ListenAddr:            ":0",
-		Shards:                2,
-		Replicas:              2,
+		Shards:                1,
+		Replicas:              1,
 		HTTPClient:            server.Client(),
 	}
 }

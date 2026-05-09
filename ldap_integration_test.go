@@ -127,8 +127,8 @@ func TestLDAPIngestUserCanIngestTeam10(t *testing.T) {
 		KibanaUsername:        "admin",
 		KibanaPassword:        testDefaultPassword,
 		ListenAddr:            ":0",
-		Shards:                2,
-		Replicas:              2,
+		Shards:                1,
+		Replicas:              1,
 		HTTPClient:            &http.Client{Timeout: 10 * time.Second},
 	}
 
@@ -259,8 +259,8 @@ func TestLDAPJohndoeCannotIngestTeam10(t *testing.T) {
 		KibanaUsername:        "admin",
 		KibanaPassword:        testDefaultPassword,
 		ListenAddr:            ":0",
-		Shards:                2,
-		Replicas:              2,
+		Shards:                1,
+		Replicas:              1,
 		HTTPClient:            &http.Client{Timeout: 10 * time.Second},
 	}
 

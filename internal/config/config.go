@@ -75,8 +75,8 @@ func LoadGateway() Config {
 		KibanaPassword:        getEnv("KIBANA_PASSWORD", getEnv("ELASTICSEARCH_PASSWORD", defaultPassword)),
 		KibanaBasePath:        normalizeBasePath(getEnv("KIBANA_BASE_PATH", DefaultKibanaBasePath)),
 		ListenAddr:            getEnv("LISTEN_ADDR", DefaultListenAddr),
-		Shards:                2,
-		Replicas:              2,
+		Shards:                1,
+		Replicas:              1,
 		HTTPClient:            DefaultHTTPClient(),
 	}
 }

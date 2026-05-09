@@ -75,7 +75,7 @@ At startup, the gateway bootstraps shared Elasticsearch resources:
 - index template `gateway-rollover-template`
 - template index pattern `*-*-rollover-*`
 - `event_time` mapping as an Elasticsearch `date`
-- default template settings of `2` shards and `2` replicas
+- default template settings of `1` shard and `1` replica per rollover backing index
 
 New backing indices are created with:
 
