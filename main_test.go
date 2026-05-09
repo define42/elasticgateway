@@ -825,7 +825,7 @@ func TestGatewayLoginMultiNamespaceRedirectsToKibanaHome(t *testing.T) {
 			_, _ = io.WriteString(w, `{}`)
 		case "PUT /api/security/role/gateway_team1_admin",
 			"PUT /api/security/role/gateway_team10_user",
-			"PUT /api/security/role/gateway_team2_rw":
+			"PUT /api/security/role/gateway_team2_ingest":
 			w.WriteHeader(http.StatusNoContent)
 		case "GET /s/team1/api/data_views/data_view/gateway-index-pattern-team1",
 			"GET /s/team10/api/data_views/data_view/gateway-index-pattern-team10",
@@ -849,7 +849,7 @@ func TestGatewayLoginMultiNamespaceRedirectsToKibanaHome(t *testing.T) {
 		return &authzpkg.User{Name: username, Namespace: "team1", PullOnly: false, DeleteAllowed: true}, []authzpkg.Access{
 			{Group: "team10_user", Namespace: "team10", PullOnly: true},
 			{Group: "team1_admin", Namespace: "team1", PullOnly: false, DeleteAllowed: true},
-			{Group: "team2_rw", Namespace: "team2", PullOnly: false},
+			{Group: "team2_ingest", Namespace: "team2", PullOnly: false},
 		}, nil
 	})
 
@@ -868,7 +868,7 @@ func TestGatewayLoginMultiNamespaceRedirectsToKibanaHome(t *testing.T) {
 	if len(cookies) == 0 {
 		t.Fatalf("expected login to set a session cookie")
 	}
-	if got := userBody["roles"]; !reflect.DeepEqual(got, []any{"gateway_team10_user", "gateway_team1_admin", "gateway_team2_rw"}) {
+	if got := userBody["roles"]; !reflect.DeepEqual(got, []any{"gateway_team10_user", "gateway_team1_admin", "gateway_team2_ingest"}) {
 		t.Fatalf("unexpected Elasticsearch roles: %#v", got)
 	}
 	metadata := nestedMap(t, userBody["metadata"])
@@ -902,7 +902,7 @@ func TestRoleRequestForAccessModes(t *testing.T) {
 			"discover_v2":  {"all"},
 			"visualize_v2": {"all"},
 		}},
-		{name: "read write", access: authzpkg.Access{Namespace: "team1", PullOnly: false}, wantAllowed: []string{"read", "write", "create_index", "view_index_metadata"}, wantBase: []string{"all"}, wantFeature: map[string][]string{}},
+		{name: "ingest", access: authzpkg.Access{Namespace: "team1", PullOnly: false}, wantAllowed: []string{"read", "write", "create_index", "view_index_metadata"}, wantBase: []string{"all"}, wantFeature: map[string][]string{}},
 		{name: "admin", access: authzpkg.Access{Namespace: "team1", PullOnly: false, DeleteAllowed: true}, wantAllowed: []string{"read", "write", "delete", "create_index", "view_index_metadata"}, wantBase: []string{"all"}, wantFeature: map[string][]string{}},
 	}
 
@@ -932,7 +932,7 @@ func TestNormalizeAccessByNamespaceCombinesPermissions(t *testing.T) {
 	t.Parallel()
 
 	result := authzpkg.NormalizeAccessByNamespace([]authzpkg.Access{
-		{Group: "team1_rw", Namespace: "team1", PullOnly: false},
+		{Group: "team1_ingest", Namespace: "team1", PullOnly: false},
 		{Group: "team1_admin", Namespace: "team1", PullOnly: false, DeleteAllowed: true},
 		{Group: "team2_user", Namespace: "team2", PullOnly: true},
 	})
@@ -1369,7 +1369,7 @@ func TestGatewayIngestRejectsWrongNamespace(t *testing.T) {
 
 	testGatewayHandlerWithAuth(testConfig(elasticSearch), func(username, _ string) (*authzpkg.User, []authzpkg.Access, error) {
 		return &authzpkg.User{Name: username, Namespace: "team1"}, []authzpkg.Access{
-			{Group: "team1_rw", Namespace: "team1"},
+			{Group: "team1_ingest", Namespace: "team1"},
 		}, nil
 	}).ServeHTTP(recorder, request)
 
@@ -1393,7 +1393,7 @@ func TestGatewayIngestRejectsBareNamespace(t *testing.T) {
 
 	testGatewayHandlerWithAuth(testConfig(elasticSearch), func(username, _ string) (*authzpkg.User, []authzpkg.Access, error) {
 		return &authzpkg.User{Name: username, Namespace: "team10"}, []authzpkg.Access{
-			{Group: "team10_rw", Namespace: "team10"},
+			{Group: "team10_ingest", Namespace: "team10"},
 		}, nil
 	}).ServeHTTP(recorder, request)
 
@@ -1433,7 +1433,7 @@ func TestGatewayIngestUsesAuthenticatedSessionAccess(t *testing.T) {
 	})
 	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, serverpkg.Session{
 		User:       &authzpkg.User{Name: "ingestuser", Namespace: "team10"},
-		Access:     []authzpkg.Access{{Group: "team10_rw", Namespace: "team10"}},
+		Access:     []authzpkg.Access{{Group: "team10_ingest", Namespace: "team10"}},
 		AuthHeader: serverpkg.BuildBasicAuthorization("ingestuser", "dogood"),
 	})
 
@@ -1707,8 +1707,8 @@ func TestGatewayValidationErrors(t *testing.T) {
 
 	gateway := testGatewayHandlerWithAuth(testConfig(elasticSearch), func(username, _ string) (*authzpkg.User, []authzpkg.Access, error) {
 		return &authzpkg.User{Name: username, Namespace: "orders"}, []authzpkg.Access{
-			{Group: "orders_rw", Namespace: "orders"},
-			{Group: longNamespace + "_rw", Namespace: longNamespace},
+			{Group: "orders_ingest", Namespace: "orders"},
+			{Group: longNamespace + "_ingest", Namespace: longNamespace},
 		}, nil
 	})
 	for _, tt := range tests {
@@ -2038,9 +2038,9 @@ func defaultTestLDAPAuthenticator(username, password string) (*authzpkg.User, []
 	}
 
 	return &authzpkg.User{Name: username, Namespace: "orders"}, []authzpkg.Access{
-		{Group: "orders_rw", Namespace: "orders"},
-		{Group: "team1_rw", Namespace: "team1"},
-		{Group: "team10_rw", Namespace: "team10"},
+		{Group: "orders_ingest", Namespace: "orders"},
+		{Group: "team1_ingest", Namespace: "team1"},
+		{Group: "team10_ingest", Namespace: "team10"},
 	}, nil
 }
 

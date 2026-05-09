@@ -29,24 +29,24 @@ func resolveIngestWriteNamespaceCases() []resolveIngestWriteNamespaceCase {
 	return []resolveIngestWriteNamespaceCase{
 		{
 			name:      "write access allows prefixed index",
-			access:    []Access{{Group: "team10_rw", Namespace: "team10"}},
+			access:    []Access{{Group: "team10_ingest", Namespace: "team10"}},
 			indexName: "team10-hello",
 			want:      "team10",
 			wantOK:    true,
 		},
 		{
 			name:      "bare namespace is not an ingest index",
-			access:    []Access{{Group: "team10_rw", Namespace: "team10"}},
+			access:    []Access{{Group: "team10_ingest", Namespace: "team10"}},
 			indexName: "team10",
 		},
 		{
 			name:      "empty suffix is not allowed",
-			access:    []Access{{Group: "team10_rw", Namespace: "team10"}},
+			access:    []Access{{Group: "team10_ingest", Namespace: "team10"}},
 			indexName: "team10-",
 		},
 		{
 			name:      "different namespace prefix is not allowed",
-			access:    []Access{{Group: "team10_rw", Namespace: "team10"}},
+			access:    []Access{{Group: "team10_ingest", Namespace: "team10"}},
 			indexName: "team100-hello",
 		},
 		{
@@ -57,8 +57,8 @@ func resolveIngestWriteNamespaceCases() []resolveIngestWriteNamespaceCase {
 		{
 			name: "non-overlapping namespaces resolve only their own indices",
 			access: []Access{
-				{Group: "team_rw", Namespace: "team"},
-				{Group: "team10_rw", Namespace: "team10"},
+				{Group: "team_ingest", Namespace: "team"},
+				{Group: "team10_ingest", Namespace: "team10"},
 			},
 			indexName: "team10-foo",
 			want:      "team10",

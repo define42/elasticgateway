@@ -48,8 +48,16 @@ func TestPermissionsFromGroup(t *testing.T) {
 			wantOK:        false,
 		},
 		{
-			name:          "rw group parses read write access",
+			name:          "rw group is rejected",
 			group:         "team10_rw",
+			wantNamespace: "",
+			wantPullOnly:  false,
+			wantDelete:    false,
+			wantOK:        false,
+		},
+		{
+			name:          "ingest group parses read write access",
+			group:         "team10_ingest",
 			wantNamespace: "team10",
 			wantPullOnly:  false,
 			wantDelete:    false,
@@ -120,7 +128,7 @@ func TestGroupNameFromDN(t *testing.T) {
 		dn   string
 		want string
 	}{
-		{name: "cn prefix", dn: "cn=team10_rw,ou=groups,dc=glauth,dc=com", want: "team10_rw"},
+		{name: "cn prefix", dn: "cn=team10_ingest,ou=groups,dc=glauth,dc=com", want: "team10_ingest"},
 		{name: "ou prefix", dn: "ou=team10_user,dc=glauth,dc=com", want: "team10_user"},
 		{name: "plain value", dn: "team10_admin", want: "team10_admin"},
 	}
@@ -140,8 +148,8 @@ func TestAccessFromGroupsFiltersPrefixAndSelectsMostPermissive(t *testing.T) {
 
 	groups := []string{
 		"cn=team10_user,ou=groups,dc=glauth,dc=com",
-		"ou=team10_rw,dc=glauth,dc=com",
-		"cn=other_rw,ou=groups,dc=glauth,dc=com",
+		"ou=team10_ingest,dc=glauth,dc=com",
+		"cn=other_ingest,ou=groups,dc=glauth,dc=com",
 	}
 
 	access, user := ldappkg.AccessFromGroups("johndoe", groups, "team")
@@ -178,8 +186,8 @@ func TestAccessFromGroupsDropsHyphenedNamespace(t *testing.T) {
 	t.Parallel()
 
 	groups := []string{
-		"cn=team10_rw,ou=groups,dc=glauth,dc=com",
-		"cn=team10-special_rw,ou=groups,dc=glauth,dc=com",
+		"cn=team10_ingest,ou=groups,dc=glauth,dc=com",
+		"cn=team10-special_ingest,ou=groups,dc=glauth,dc=com",
 	}
 
 	access, user := ldappkg.AccessFromGroups("johndoe", groups, "team")

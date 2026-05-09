@@ -136,7 +136,7 @@ func RoleModeForAccess(access Access) string {
 	case !access.PullOnly && access.DeleteAllowed:
 		return "admin"
 	case !access.PullOnly:
-		return "rw"
+		return "ingest"
 	default:
 		return "user"
 	}
@@ -152,7 +152,7 @@ func AllowedActionsForAccess(mode string) []string {
 	switch mode {
 	case "admin":
 		return []string{"read", "write", "delete", "create_index", "view_index_metadata"}
-	case "rw":
+	case "ingest":
 		return []string{"read", "write", "create_index", "view_index_metadata"}
 	case "user":
 		return []string{"read", "view_index_metadata"}

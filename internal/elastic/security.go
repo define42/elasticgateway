@@ -113,7 +113,7 @@ func kibanaPrivilegesForMode(mode string) ([]string, map[string][]string) {
 			"discover_v2":  {"all"},
 			"visualize_v2": {"all"},
 		}
-	case "rw", "admin":
+	case "ingest", "admin":
 		return []string{"all"}, map[string][]string{}
 	default:
 		return []string{}, map[string][]string{
