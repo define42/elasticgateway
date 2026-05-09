@@ -3,6 +3,8 @@ package server
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/sha512"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -83,19 +85,34 @@ func New(client *elastic.Client, authenticate AuthenticateFunc) *Gateway {
 		Client:          client,
 		Authenticate:    authenticate,
 		IngestAuthCache: ingest.NewAuthCache(),
-		SecureCookie:    newSecureCookie(),
+		SecureCookie:    newSecureCookie(client.Config.SessionSecret),
 	}
 }
 
-// newSecureCookie builds a securecookie codec with freshly generated keys.
-// Keys are generated per process so cookies do not survive a restart.
-// In a multi-instance deployment behind a load balancer, replace with a
-// codec configured from a shared secret so every gateway can decode cookies
-// minted by its peers.
-func newSecureCookie() *securecookie.SecureCookie {
+// newSecureCookie builds a securecookie codec. With no configured secret,
+// keys are generated per process so cookies do not survive a restart.
+func newSecureCookie(sessionSecret string) *securecookie.SecureCookie {
+	sessionSecret = strings.TrimSpace(sessionSecret)
+	if sessionSecret != "" {
+		return securecookie.New(
+			deriveSessionHashKey(sessionSecret),
+			deriveSessionBlockKey(sessionSecret),
+		).MaxAge(sessionCookieMaxAgeSeconds)
+	}
+
 	hashKey := securecookie.GenerateRandomKey(64)
 	blockKey := securecookie.GenerateRandomKey(32)
 	return securecookie.New(hashKey, blockKey).MaxAge(sessionCookieMaxAgeSeconds)
+}
+
+func deriveSessionHashKey(sessionSecret string) []byte {
+	sum := sha512.Sum512([]byte("elasticgateway session hash\x00" + sessionSecret))
+	return sum[:]
+}
+
+func deriveSessionBlockKey(sessionSecret string) []byte {
+	sum := sha256.Sum256([]byte("elasticgateway session block\x00" + sessionSecret))
+	return sum[:]
 }
 
 // EncodeSessionCookieValue encodes a session into a securecookie value.

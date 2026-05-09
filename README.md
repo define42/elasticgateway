@@ -116,6 +116,7 @@ Configuration is environment based.
 | `KIBANA_USERNAME` | `ELASTICSEARCH_USERNAME` or `elastic` | Kibana API username |
 | `KIBANA_PASSWORD` | `ELASTICSEARCH_PASSWORD` or `ELASTIC_PASSWORD` or empty | Kibana API password |
 | `KIBANA_BASE_PATH` | `/kibana` | Proxied Kibana base path |
+| `SESSION_SECRET` | generated at process start | Shared secret used to sign and encrypt gateway session cookies |
 | `LDAP_URL` | `ldaps://ldap:389` | LDAP server URL |
 | `LDAP_BASE_DN` | `dc=glauth,dc=com` | LDAP search base |
 | `LDAP_USER_FILTER` | `(mail=%s)` | User lookup filter; `%s` receives the login email |
@@ -130,8 +131,8 @@ Production notes:
 - Set `LDAP_SKIP_TLS_VERIFY=false` with trusted LDAP certificates.
 - Set `ELASTICSEARCH_SKIP_TLS_VERIFY=false` outside local self-signed development.
 - Run the gateway behind HTTPS so session cookies are sent with the `Secure` flag.
-- The session cookie codec uses random per-process keys. Restarting the gateway invalidates existing sessions.
-- Multiple gateway instances need shared cookie keys; this repository does not currently expose shared-key configuration.
+- Set the same long random `SESSION_SECRET` on every gateway instance so sessions survive restarts and load-balanced requests.
+- If `SESSION_SECRET` is unset, the gateway generates random per-process session keys and restart invalidates existing sessions.
 - The gateway API user needs permission to manage ILM policies, index templates, spaces, roles, native users, data views, and indices.
 
 ## Local Docker Demo
@@ -236,7 +237,6 @@ Repository layout:
 ## Limitations
 
 - Ingest is single-document only; there is no bulk API.
-- Session keys are generated at process start and are not configurable yet.
 - Shard and replica counts are currently hard-coded in the gateway config.
 - Kibana resource setup is synchronous; failed space or data-view creation fails the ingest before writing the document.
 - The service is built for namespace-prefixed index families, not arbitrary Elasticsearch indexing.

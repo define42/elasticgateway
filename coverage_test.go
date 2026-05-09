@@ -37,6 +37,15 @@ func TestDefaultHTTPClient(t *testing.T) {
 	}
 }
 
+func TestLoadGatewayReadsSessionSecret(t *testing.T) {
+	t.Setenv("SESSION_SECRET", "shared-session-secret-for-tests")
+
+	cfg := appconfig.LoadGateway()
+	if cfg.SessionSecret != "shared-session-secret-for-tests" {
+		t.Fatalf("unexpected session secret: %q", cfg.SessionSecret)
+	}
+}
+
 func TestRunReturnsBootstrapFailures(t *testing.T) {
 	t.Run("policy failure", func(t *testing.T) {
 		elasticSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

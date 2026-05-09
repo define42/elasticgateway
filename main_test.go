@@ -1286,6 +1286,63 @@ func TestGatewayInvalidSessionRedirectsToLogin(t *testing.T) {
 	}
 }
 
+func TestGatewayConfiguredSessionSecretSurvivesRestart(t *testing.T) {
+	t.Parallel()
+
+	cfg := appconfig.Config{
+		KibanaURL:     "http://kibana.example",
+		SessionSecret: "test-session-secret-with-enough-entropy-for-cookie-keys",
+	}
+	firstGateway := newTestGateway(elasticpkg.NewClient(cfg), nil)
+	secondGateway := newTestGateway(elasticpkg.NewClient(cfg), nil)
+
+	encoded, expiresAt := mustEncodeSessionCookieFromData(t, firstGateway, serverpkg.Session{
+		User:   &authzpkg.User{Name: "testuser"},
+		Access: []authzpkg.Access{{Group: "team10_user", Namespace: "team10", PullOnly: true}},
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/login", nil)
+	request.AddCookie(&http.Cookie{Name: serverpkg.SessionCookieName, Value: encoded, Expires: expiresAt})
+
+	secondGateway.Handler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("expected status 303, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if got := recorder.Header().Get("Location"); got != "/kibana/s/team10/app/home" {
+		t.Fatalf("expected configured secret to decode restarted session, got redirect %q", got)
+	}
+}
+
+func TestGatewayDifferentSessionSecretRejectsCookie(t *testing.T) {
+	t.Parallel()
+
+	firstGateway := newTestGateway(elasticpkg.NewClient(appconfig.Config{
+		KibanaURL:     "http://kibana.example",
+		SessionSecret: "first-test-session-secret-with-enough-entropy",
+	}), nil)
+	secondGateway := newTestGateway(elasticpkg.NewClient(appconfig.Config{
+		KibanaURL:     "http://kibana.example",
+		SessionSecret: "second-test-session-secret-with-enough-entropy",
+	}), nil)
+
+	encoded, expiresAt := mustEncodeSessionCookieFromData(t, firstGateway, serverpkg.Session{
+		User:   &authzpkg.User{Name: "testuser"},
+		Access: []authzpkg.Access{{Group: "team10_user", Namespace: "team10", PullOnly: true}},
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/login", nil)
+	request.AddCookie(&http.Cookie{Name: serverpkg.SessionCookieName, Value: encoded, Expires: expiresAt})
+
+	secondGateway.Handler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected invalid configured-secret session to render login, got %d", recorder.Code)
+	}
+}
+
 func TestGatewayIngestRequiresAuthentication(t *testing.T) {
 	t.Parallel()
 

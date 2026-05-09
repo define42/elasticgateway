@@ -31,6 +31,7 @@ type Config struct {
 	KibanaUsername        string
 	KibanaPassword        string
 	KibanaBasePath        string
+	SessionSecret         string
 	ListenAddr            string
 	Shards                int
 	Replicas              int
@@ -74,6 +75,7 @@ func LoadGateway() Config {
 		KibanaUsername:        getEnv("KIBANA_USERNAME", getEnv("ELASTICSEARCH_USERNAME", DefaultUsername)),
 		KibanaPassword:        getEnv("KIBANA_PASSWORD", getEnv("ELASTICSEARCH_PASSWORD", defaultPassword)),
 		KibanaBasePath:        normalizeBasePath(getEnv("KIBANA_BASE_PATH", DefaultKibanaBasePath)),
+		SessionSecret:         getEnv("SESSION_SECRET", ""),
 		ListenAddr:            getEnv("LISTEN_ADDR", DefaultListenAddr),
 		Shards:                1,
 		Replicas:              1,
