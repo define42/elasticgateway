@@ -127,7 +127,7 @@ func AccessFromGroups(username string, groups []string, prefix string) ([]authz.
 			continue
 		}
 
-		ns, pullOnly, deleteAllowed, dashboardEdit, ok := PermissionsFromGroup(groupName)
+		ns, pullOnly, deleteAllowed, ok := PermissionsFromGroup(groupName)
 		if !ok {
 			continue
 		}
@@ -140,7 +140,6 @@ func AccessFromGroups(username string, groups []string, prefix string) ([]authz.
 			Namespace:     ns,
 			PullOnly:      pullOnly,
 			DeleteAllowed: deleteAllowed,
-			DashboardEdit: dashboardEdit,
 		})
 
 		candidate := &authz.User{
@@ -149,7 +148,6 @@ func AccessFromGroups(username string, groups []string, prefix string) ([]authz.
 			Namespace:     ns,
 			PullOnly:      pullOnly,
 			DeleteAllowed: deleteAllowed,
-			DashboardEdit: dashboardEdit,
 		}
 
 		if selected == nil || authz.MorePermissive(candidate, selected) {
@@ -181,24 +179,21 @@ func GroupNameFromDN(dn string) string {
 }
 
 // PermissionsFromGroup parses namespace access suffixes like _r and _rwd.
-func PermissionsFromGroup(group string) (namespace string, pullOnly bool, deleteAllowed bool, dashboardEdit bool, ok bool) {
+func PermissionsFromGroup(group string) (namespace string, pullOnly bool, deleteAllowed bool, ok bool) {
 	switch {
 	case strings.HasSuffix(group, "_rwd"):
 		ns := strings.TrimSuffix(group, "_rwd")
-		return ns, false, true, false, true
+		return ns, false, true, true
 	case strings.HasSuffix(group, "_rw"):
 		ns := strings.TrimSuffix(group, "_rw")
-		return ns, false, false, false, true
+		return ns, false, false, true
 	case strings.HasSuffix(group, "_rd"):
 		ns := strings.TrimSuffix(group, "_rd")
-		return ns, true, true, false, true
-	case strings.HasSuffix(group, "_re"):
-		ns := strings.TrimSuffix(group, "_re")
-		return ns, true, false, true, true
+		return ns, true, true, true
 	case strings.HasSuffix(group, "_r"):
 		ns := strings.TrimSuffix(group, "_r")
-		return ns, true, false, false, true
+		return ns, true, false, true
 	default:
-		return "", false, false, false, false
+		return "", false, false, false
 	}
 }

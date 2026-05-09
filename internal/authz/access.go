@@ -24,7 +24,6 @@ type User struct {
 	Namespace     string
 	PullOnly      bool
 	DeleteAllowed bool
-	DashboardEdit bool
 }
 
 // Access describes namespace permissions derived from one LDAP group.
@@ -33,7 +32,6 @@ type Access struct {
 	Namespace     string
 	PullOnly      bool
 	DeleteAllowed bool
-	DashboardEdit bool
 }
 
 // MorePermissive reports whether a grants more access than b.
@@ -43,9 +41,6 @@ func MorePermissive(a, b *User) bool {
 	}
 	if a.PullOnly != b.PullOnly {
 		return !a.PullOnly
-	}
-	if a.DashboardEdit != b.DashboardEdit {
-		return a.DashboardEdit
 	}
 	return false
 }
@@ -63,7 +58,6 @@ func NormalizeAccessByNamespace(access []Access) []Access {
 
 		existing.PullOnly = existing.PullOnly && item.PullOnly
 		existing.DeleteAllowed = existing.DeleteAllowed || item.DeleteAllowed
-		existing.DashboardEdit = existing.DashboardEdit || item.DashboardEdit
 		if existing.Group == "" {
 			existing.Group = item.Group
 		}
@@ -145,8 +139,6 @@ func RoleModeForAccess(access Access) string {
 		return "rw"
 	case access.DeleteAllowed:
 		return "rd"
-	case access.DashboardEdit:
-		return "re"
 	default:
 		return "r"
 	}
@@ -166,8 +158,6 @@ func AllowedActionsForAccess(mode string) []string {
 		return []string{"read", "write", "create_index", "view_index_metadata"}
 	case "rd":
 		return []string{"read", "delete", "view_index_metadata"}
-	case "re":
-		return []string{"read", "view_index_metadata"}
 	default:
 		return []string{"read", "view_index_metadata"}
 	}

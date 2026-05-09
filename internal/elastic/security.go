@@ -109,23 +109,17 @@ func kibanaPrivilegesForMode(mode string) ([]string, map[string][]string) {
 	switch mode {
 	case "r":
 		return []string{}, map[string][]string{
-			"dashboard_v2": {"read"},
-			"discover_v2":  {"read"},
-			"visualize_v2": {"read"},
-		}
-	case "re":
-		return []string{}, map[string][]string{
 			"dashboard_v2": {"all"},
-			"discover_v2":  {"read"},
+			"discover_v2":  {"all"},
 			"visualize_v2": {"all"},
 		}
 	case "rw", "rd", "rwd":
 		return []string{"all"}, map[string][]string{}
 	default:
 		return []string{}, map[string][]string{
-			"dashboard_v2": {"read"},
-			"discover_v2":  {"read"},
-			"visualize_v2": {"read"},
+			"dashboard_v2": {"all"},
+			"discover_v2":  {"all"},
+			"visualize_v2": {"all"},
 		}
 	}
 }

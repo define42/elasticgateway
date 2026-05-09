@@ -898,13 +898,8 @@ func TestRoleRequestForAccessModes(t *testing.T) {
 		wantFeature map[string][]string
 	}{
 		{name: "read", access: authzpkg.Access{Namespace: "team1", PullOnly: true}, wantAllowed: []string{"read", "view_index_metadata"}, wantBase: []string{}, wantFeature: map[string][]string{
-			"dashboard_v2": {"read"},
-			"discover_v2":  {"read"},
-			"visualize_v2": {"read"},
-		}},
-		{name: "read edit", access: authzpkg.Access{Namespace: "team1", PullOnly: true, DashboardEdit: true}, wantAllowed: []string{"read", "view_index_metadata"}, wantBase: []string{}, wantFeature: map[string][]string{
 			"dashboard_v2": {"all"},
-			"discover_v2":  {"read"},
+			"discover_v2":  {"all"},
 			"visualize_v2": {"all"},
 		}},
 		{name: "read delete", access: authzpkg.Access{Namespace: "team1", PullOnly: true, DeleteAllowed: true}, wantAllowed: []string{"read", "delete", "view_index_metadata"}, wantBase: []string{"all"}, wantFeature: map[string][]string{}},
@@ -941,7 +936,6 @@ func TestNormalizeAccessByNamespaceCombinesPermissions(t *testing.T) {
 		{Group: "team1_rw", Namespace: "team1", PullOnly: false},
 		{Group: "team1_rd", Namespace: "team1", PullOnly: true, DeleteAllowed: true},
 		{Group: "team2_r", Namespace: "team2", PullOnly: true},
-		{Group: "team2_re", Namespace: "team2", PullOnly: true, DashboardEdit: true},
 	})
 
 	if len(result) != 2 {
@@ -950,8 +944,8 @@ func TestNormalizeAccessByNamespaceCombinesPermissions(t *testing.T) {
 	if got := authzpkg.RoleModeForAccess(result[0]); got != "rwd" {
 		t.Fatalf("expected team1 to combine to rwd, got %q", got)
 	}
-	if got := authzpkg.RoleModeForAccess(result[1]); got != "re" {
-		t.Fatalf("expected team2 to become re, got %q", got)
+	if got := authzpkg.RoleModeForAccess(result[1]); got != "r" {
+		t.Fatalf("expected team2 to stay r, got %q", got)
 	}
 }
 

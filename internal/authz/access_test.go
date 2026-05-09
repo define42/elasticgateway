@@ -55,11 +55,6 @@ func resolveIngestWriteNamespaceCases() []resolveIngestWriteNamespaceCase {
 			indexName: "team10-hello",
 		},
 		{
-			name:      "dashboard access is not write access",
-			access:    []Access{{Group: "team10_re", Namespace: "team10", PullOnly: true, DashboardEdit: true}},
-			indexName: "team10-hello",
-		},
-		{
 			name: "non-overlapping namespaces resolve only their own indices",
 			access: []Access{
 				{Group: "team_rw", Namespace: "team"},

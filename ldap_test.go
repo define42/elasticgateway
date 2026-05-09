@@ -21,7 +21,6 @@ func TestPermissionsFromGroup(t *testing.T) {
 		wantNamespace string
 		wantPullOnly  bool
 		wantDelete    bool
-		wantDashboard bool
 		wantOK        bool
 	}{
 		{
@@ -30,7 +29,6 @@ func TestPermissionsFromGroup(t *testing.T) {
 			wantNamespace: "team10",
 			wantPullOnly:  false,
 			wantDelete:    true,
-			wantDashboard: false,
 			wantOK:        true,
 		},
 		{
@@ -39,7 +37,6 @@ func TestPermissionsFromGroup(t *testing.T) {
 			wantNamespace: "team10",
 			wantPullOnly:  true,
 			wantDelete:    true,
-			wantDashboard: false,
 			wantOK:        true,
 		},
 		{
@@ -48,17 +45,15 @@ func TestPermissionsFromGroup(t *testing.T) {
 			wantNamespace: "team10",
 			wantPullOnly:  false,
 			wantDelete:    false,
-			wantDashboard: false,
 			wantOK:        true,
 		},
 		{
-			name:          "re group parses read dashboard-edit access",
+			name:          "re group is rejected",
 			group:         "team10_re",
-			wantNamespace: "team10",
-			wantPullOnly:  true,
+			wantNamespace: "",
+			wantPullOnly:  false,
 			wantDelete:    false,
-			wantDashboard: true,
-			wantOK:        true,
+			wantOK:        false,
 		},
 		{
 			name:          "r group parses read-only access",
@@ -66,7 +61,6 @@ func TestPermissionsFromGroup(t *testing.T) {
 			wantNamespace: "team10",
 			wantPullOnly:  true,
 			wantDelete:    false,
-			wantDashboard: false,
 			wantOK:        true,
 		},
 		{
@@ -75,7 +69,6 @@ func TestPermissionsFromGroup(t *testing.T) {
 			wantNamespace: "",
 			wantPullOnly:  false,
 			wantDelete:    false,
-			wantDashboard: false,
 			wantOK:        false,
 		},
 	}
@@ -84,20 +77,18 @@ func TestPermissionsFromGroup(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			gotNamespace, gotPullOnly, gotDelete, gotDashboard, gotOK := ldappkg.PermissionsFromGroup(tt.group)
-			if gotNamespace != tt.wantNamespace || gotPullOnly != tt.wantPullOnly || gotDelete != tt.wantDelete || gotDashboard != tt.wantDashboard || gotOK != tt.wantOK {
+			gotNamespace, gotPullOnly, gotDelete, gotOK := ldappkg.PermissionsFromGroup(tt.group)
+			if gotNamespace != tt.wantNamespace || gotPullOnly != tt.wantPullOnly || gotDelete != tt.wantDelete || gotOK != tt.wantOK {
 				t.Fatalf(
-					"ldappkg.PermissionsFromGroup(%q) = (%q, %t, %t, %t, %t), want (%q, %t, %t, %t, %t)",
+					"ldappkg.PermissionsFromGroup(%q) = (%q, %t, %t, %t), want (%q, %t, %t, %t)",
 					tt.group,
 					gotNamespace,
 					gotPullOnly,
 					gotDelete,
-					gotDashboard,
 					gotOK,
 					tt.wantNamespace,
 					tt.wantPullOnly,
 					tt.wantDelete,
-					tt.wantDashboard,
 					tt.wantOK,
 				)
 			}
@@ -149,21 +140,21 @@ func TestAccessFromGroupsFiltersPrefixAndSelectsMostPermissive(t *testing.T) {
 	}
 }
 
-func TestAccessFromGroupsSupportsDashboardMode(t *testing.T) {
+func TestAccessFromGroupsRejectsReadEditSuffix(t *testing.T) {
 	t.Parallel()
 
-	access, user := ldappkg.AccessFromGroups("dashboarder", []string{
+	access, user := ldappkg.AccessFromGroups("reader", []string{
 		"cn=team10_r,ou=groups,dc=glauth,dc=com",
 		"cn=team10_re,ou=groups,dc=glauth,dc=com",
 	}, "team")
 	if user == nil {
 		t.Fatal("expected selected user")
 	}
-	if user.Namespace != "team10" || !user.PullOnly || user.DeleteAllowed || !user.DashboardEdit {
+	if user.Namespace != "team10" || !user.PullOnly || user.DeleteAllowed {
 		t.Fatalf("unexpected selected user permissions: %+v", user)
 	}
-	if len(access) != 2 {
-		t.Fatalf("expected two team-prefixed access entries, got %+v", access)
+	if len(access) != 1 {
+		t.Fatalf("expected only the _r access entry, got %+v", access)
 	}
 }
 
