@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
@@ -18,6 +19,8 @@ import (
 )
 
 func main() {
+	configureLogger()
+
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -44,6 +47,10 @@ func main() {
 	}); err != nil {
 		fatal(err)
 	}
+}
+
+func configureLogger() {
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 }
 
 func run(ctx context.Context, cfg appconfig.Config, serve func(http.Handler) error) error {

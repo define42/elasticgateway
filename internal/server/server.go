@@ -10,7 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"mime"
 	"net/http"
 	"net/url"
@@ -61,6 +61,7 @@ type Gateway struct {
 	Authenticate    AuthenticateFunc
 	IngestAuthCache *ingest.AuthCache
 	SecureCookie    *securecookie.SecureCookie
+	Logger          *slog.Logger
 	kibanaTarget    *url.URL
 	kibanaTargetErr error
 	sessionMaxAge   int
@@ -231,12 +232,14 @@ func (g *Gateway) handleLogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if sessionData, ok := g.currentSession(r); ok && sessionData.User != nil {
+	sessionData, sessionOK := g.currentSession(r)
+	if sessionOK && sessionData.User != nil {
 		// Best-effort: drop this instance's LDAP basic-auth cache for the
 		// logged-out user. With multiple gateways behind a load balancer,
 		// peers still have their own caches until those entries expire.
 		g.IngestAuthCache.ForgetUser(sessionData.User.Name)
 	}
+	g.logLogout(r, sessionData, sessionOK)
 
 	g.clearSessionCookie(w, r)
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
@@ -273,9 +276,11 @@ func (g *Gateway) handleKibanaLogout(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if sessionData, ok := g.currentSession(r); ok && sessionData.User != nil {
+	sessionData, sessionOK := g.currentSession(r)
+	if sessionOK && sessionData.User != nil {
 		g.IngestAuthCache.ForgetUser(sessionData.User.Name)
 	}
+	g.logLogout(r, sessionData, sessionOK)
 
 	g.clearSessionCookie(w, r)
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
@@ -312,6 +317,7 @@ func (g *Gateway) handleDemo(w http.ResponseWriter, r *http.Request) {
 
 func (g *Gateway) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
+		g.logLoginFailure(r, "", http.StatusBadRequest, "invalid_form", err)
 		g.RenderLoginPage(w, http.StatusBadRequest, LoginPageData{Error: "failed to read login form"})
 		return
 	}
@@ -319,29 +325,23 @@ func (g *Gateway) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	username := strings.TrimSpace(r.Form.Get("username"))
 	password := r.Form.Get("password")
 	if username == "" || password == "" {
-		g.RenderLoginPage(w, http.StatusUnauthorized, LoginPageData{
-			Error:    "username and password are required",
-			Username: username,
-		})
+		g.logLoginFailure(r, username, http.StatusUnauthorized, "missing_credentials", nil)
+		g.renderLoginError(w, http.StatusUnauthorized, "username and password are required", username)
 		return
 	}
 
 	user, access, err := g.Authenticate(username, password)
 	if err != nil {
 		status, message := loginErrorResponse(err)
-		g.RenderLoginPage(w, status, LoginPageData{
-			Error:    message,
-			Username: username,
-		})
+		g.logLoginFailure(r, username, status, loginFailureReason(err), err)
+		g.renderLoginError(w, status, message, username)
 		return
 	}
 
 	internalPassword, err := generateInternalUserPassword()
 	if err != nil {
-		g.RenderLoginPage(w, http.StatusBadGateway, LoginPageData{
-			Error:    "failed to allocate session credentials",
-			Username: username,
-		})
+		g.logLoginFailure(r, username, http.StatusBadGateway, "session_credentials_error", err)
+		g.renderLoginError(w, http.StatusBadGateway, "failed to allocate session credentials", username)
 		return
 	}
 
@@ -352,20 +352,28 @@ func (g *Gateway) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 			status = http.StatusForbidden
 			message = "this account cannot be used for gateway login"
 		}
-		log.Printf("failed to provision login user: %v", err)
-		g.RenderLoginPage(w, status, LoginPageData{
-			Error:    message,
-			Username: username,
-		})
+		g.logLoginFailure(r, username, status, provisionLoginFailureReason(err), err)
+		g.renderLoginError(w, status, message, username)
 		return
 	}
 
-	g.setSessionCookie(w, r, Session{
+	if err := g.setSessionCookie(w, r, Session{
 		User:       user,
 		Access:     access,
 		AuthHeader: BuildBasicAuthorization(username, internalPassword),
-	})
+	}); err != nil {
+		g.logLoginFailure(r, username, http.StatusInternalServerError, "session_cookie_error", err)
+		return
+	}
+	g.logLoginSuccess(r, username, user, access)
 	http.Redirect(w, r, kibanaLandingPath(access), http.StatusSeeOther)
+}
+
+func (g *Gateway) renderLoginError(w http.ResponseWriter, status int, message, username string) {
+	g.RenderLoginPage(w, status, LoginPageData{
+		Error:    message,
+		Username: username,
+	})
 }
 
 func (g *Gateway) handleIngest(w http.ResponseWriter, r *http.Request) {
@@ -503,9 +511,110 @@ func loginErrorResponse(err error) (int, string) {
 		errors.Is(err, ldappkg.ErrUnauthorized):
 		return http.StatusUnauthorized, invalidLoginCredentialsMessage
 	default:
-		log.Printf("LDAP authentication failed: %v", err)
 		return http.StatusBadGateway, "LDAP authentication failed"
 	}
+}
+
+func loginFailureReason(err error) string {
+	switch {
+	case errors.Is(err, ldappkg.ErrInvalidCredentials),
+		errors.Is(err, ldappkg.ErrUserNotFound):
+		return "invalid_credentials"
+	case errors.Is(err, ldappkg.ErrUnauthorized):
+		return "unauthorized"
+	default:
+		return "ldap_error"
+	}
+}
+
+func provisionLoginFailureReason(err error) string {
+	if errors.Is(err, elastic.ErrReservedNativeUser) {
+		return "reserved_user"
+	}
+	return "provisioning_error"
+}
+
+func (g *Gateway) logLoginSuccess(r *http.Request, submittedUsername string, user *authz.User, access []authz.Access) {
+	attrs := []any{
+		slog.String("event", "user_login"),
+		slog.String("username", loginLogUsername(submittedUsername, user)),
+		slog.Int("http_status", http.StatusSeeOther),
+		slog.Any("namespaces", accessNamespaces(access)),
+	}
+	attrs = append(attrs, requestLogAttrs(r)...)
+
+	g.logger().InfoContext(r.Context(), "user login", attrs...)
+}
+
+func (g *Gateway) logLoginFailure(r *http.Request, username string, status int, reason string, err error) {
+	attrs := []any{
+		slog.String("event", "user_login_failed"),
+		slog.String("username", strings.TrimSpace(username)),
+		slog.Int("http_status", status),
+		slog.String("reason", reason),
+	}
+	attrs = append(attrs, requestLogAttrs(r)...)
+	if err != nil {
+		attrs = append(attrs, slog.String("error", err.Error()))
+	}
+
+	g.logger().WarnContext(r.Context(), "user login failed", attrs...)
+}
+
+func (g *Gateway) logLogout(r *http.Request, sessionData Session, authenticated bool) {
+	attrs := []any{
+		slog.String("event", "user_logout"),
+		slog.String("username", sessionLogUsername(sessionData)),
+		slog.Bool("authenticated", authenticated),
+		slog.Int("http_status", http.StatusSeeOther),
+	}
+	attrs = append(attrs, requestLogAttrs(r)...)
+
+	g.logger().InfoContext(r.Context(), "user logout", attrs...)
+}
+
+func (g *Gateway) logger() *slog.Logger {
+	if g == nil || g.Logger == nil {
+		return slog.Default()
+	}
+	return g.Logger
+}
+
+func loginLogUsername(submittedUsername string, user *authz.User) string {
+	if user != nil && strings.TrimSpace(user.Name) != "" {
+		return strings.TrimSpace(user.Name)
+	}
+	return strings.TrimSpace(submittedUsername)
+}
+
+func sessionLogUsername(sessionData Session) string {
+	if sessionData.User == nil {
+		return ""
+	}
+	return strings.TrimSpace(sessionData.User.Name)
+}
+
+func accessNamespaces(access []authz.Access) []string {
+	effective := authz.NormalizeAccessByNamespace(access)
+	namespaces := make([]string, 0, len(effective))
+	for _, item := range effective {
+		namespace := strings.TrimSpace(item.Namespace)
+		if namespace != "" {
+			namespaces = append(namespaces, namespace)
+		}
+	}
+	return namespaces
+}
+
+func requestLogAttrs(r *http.Request) []any {
+	attrs := []any{
+		slog.String("method", r.Method),
+		slog.String("remote_addr", r.RemoteAddr),
+	}
+	if r.URL != nil {
+		attrs = append(attrs, slog.String("path", r.URL.Path))
+	}
+	return attrs
 }
 
 func (g *Gateway) authorizeIngestRequest(r *http.Request, indexName string) (string, error) {
@@ -739,13 +848,13 @@ func (g *Gateway) readSessionCookie(r *http.Request) (Session, bool) {
 // setSessionCookie encodes s and writes it as the gateway session cookie.
 // The browser MaxAge mirrors gorilla/securecookie's MaxAge so the browser
 // drops the cookie at the same moment the gateway stops accepting it.
-func (g *Gateway) setSessionCookie(w http.ResponseWriter, r *http.Request, s Session) {
+func (g *Gateway) setSessionCookie(w http.ResponseWriter, r *http.Request, s Session) error {
 	encoded, err := g.EncodeSessionCookieValue(s)
 	if err != nil {
 		// Encoding only fails if the codec is misconfigured; surface as a
 		// server error rather than silently dropping the session cookie.
 		http.Error(w, "failed to encode session cookie", http.StatusInternalServerError)
-		return
+		return err
 	}
 	// #nosec G124 -- Secure is enabled for HTTPS and for explicit upstream TLS termination deployments.
 	http.SetCookie(w, &http.Cookie{
@@ -757,6 +866,7 @@ func (g *Gateway) setSessionCookie(w http.ResponseWriter, r *http.Request, s Ses
 		Secure:   g.sessionCookieSecure(r),
 		MaxAge:   g.sessionMaxAge,
 	})
+	return nil
 }
 
 func sessionCookieMaxAgeSeconds(sessionTTL time.Duration) int {

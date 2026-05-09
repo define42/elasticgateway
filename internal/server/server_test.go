@@ -1,8 +1,10 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"html/template"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -15,13 +17,117 @@ import (
 	elasticpkg "github.com/define42/elasticgateway/internal/elastic"
 )
 
+func TestGatewayLogsLoginSuccessAsJSON(t *testing.T) {
+	var logOutput bytes.Buffer
+	elasticSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /_security/user/alice":
+			http.NotFound(w, r)
+		case "PUT /_security/role/gateway_team1_user":
+			w.WriteHeader(http.StatusOK)
+		case "PUT /_security/user/alice":
+			w.WriteHeader(http.StatusCreated)
+		default:
+			t.Fatalf("unexpected Elasticsearch request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer elasticSearch.Close()
+
+	gateway := New(elasticpkg.NewClient(appconfig.Config{
+		ElasticsearchURL: elasticSearch.URL,
+		HTTPClient:       elasticSearch.Client(),
+	}), func(username, _ string) (*authz.User, []authz.Access, error) {
+		return &authz.User{Name: username}, []authz.Access{
+			{Group: "team1_user", Namespace: "team1", PullOnly: true},
+		}, nil
+	})
+	gateway.Logger = testJSONLogger(&logOutput)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=alice&password=dogood"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	gateway.Handler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("expected status 303, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+
+	entry := onlyLogEntry(t, &logOutput)
+	if entry["event"] != "user_login" || entry["msg"] != "user login" || entry["level"] != "INFO" {
+		t.Fatalf("unexpected login log entry: %#v", entry)
+	}
+	if entry["username"] != "alice" || entry["http_status"] != float64(http.StatusSeeOther) {
+		t.Fatalf("unexpected login log fields: %#v", entry)
+	}
+	namespaces, ok := entry["namespaces"].([]any)
+	if !ok || len(namespaces) != 1 || namespaces[0] != "team1" {
+		t.Fatalf("expected team1 namespace in login log, got %#v", entry["namespaces"])
+	}
+}
+
+func TestGatewayLogsLoginFailureAsJSON(t *testing.T) {
+	var logOutput bytes.Buffer
+	gateway := New(elasticpkg.NewClient(appconfig.Config{}), nil)
+	gateway.Logger = testJSONLogger(&logOutput)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=alice&password=wrong"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	gateway.Handler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status 401, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+
+	entry := onlyLogEntry(t, &logOutput)
+	if entry["event"] != "user_login_failed" || entry["msg"] != "user login failed" || entry["level"] != "WARN" {
+		t.Fatalf("unexpected login-failure log entry: %#v", entry)
+	}
+	if entry["username"] != "alice" || entry["reason"] != "invalid_credentials" || entry["http_status"] != float64(http.StatusUnauthorized) {
+		t.Fatalf("unexpected login-failure log fields: %#v", entry)
+	}
+}
+
+func TestGatewayLogsLogoutAsJSON(t *testing.T) {
+	var logOutput bytes.Buffer
+	gateway := New(elasticpkg.NewClient(appconfig.Config{}), nil)
+	gateway.Logger = testJSONLogger(&logOutput)
+
+	encoded, err := gateway.EncodeSessionCookieValue(Session{User: &authz.User{Name: "alice"}})
+	if err != nil {
+		t.Fatalf("encode session cookie: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/logout", nil)
+	request.AddCookie(&http.Cookie{Name: SessionCookieName, Value: encoded})
+
+	gateway.Handler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("expected status 303, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+
+	entry := onlyLogEntry(t, &logOutput)
+	if entry["event"] != "user_logout" || entry["msg"] != "user logout" || entry["level"] != "INFO" {
+		t.Fatalf("unexpected logout log entry: %#v", entry)
+	}
+	if entry["username"] != "alice" || entry["authenticated"] != true || entry["http_status"] != float64(http.StatusSeeOther) {
+		t.Fatalf("unexpected logout log fields: %#v", entry)
+	}
+}
+
 func TestSessionCookieSecureHonorsForceSecureCookies(t *testing.T) {
 	gateway := New(elasticpkg.NewClient(appconfig.Config{ForceSecureCookies: true}), nil)
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/login", nil)
 
-	gateway.setSessionCookie(recorder, request, Session{User: &authz.User{Name: "alice"}})
+	if err := gateway.setSessionCookie(recorder, request, Session{User: &authz.User{Name: "alice"}}); err != nil {
+		t.Fatalf("set session cookie: %v", err)
+	}
 
 	cookie := findTestCookie(t, recorder.Result().Cookies(), SessionCookieName)
 	if !cookie.Secure {
@@ -35,7 +141,9 @@ func TestSessionCookieMaxAgeHonorsSessionTTL(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/login", nil)
 
-	gateway.setSessionCookie(recorder, request, Session{User: &authz.User{Name: "alice"}})
+	if err := gateway.setSessionCookie(recorder, request, Session{User: &authz.User{Name: "alice"}}); err != nil {
+		t.Fatalf("set session cookie: %v", err)
+	}
 
 	cookie := findTestCookie(t, recorder.Result().Cookies(), SessionCookieName)
 	if cookie.MaxAge != 5400 {
@@ -297,6 +405,32 @@ func TestDecodeIngestDocumentsReturnRequestEntityTooLargeAfterReadingPastLimit(t
 			}
 		})
 	}
+}
+
+func testJSONLogger(output *bytes.Buffer) *slog.Logger {
+	return slog.New(slog.NewJSONHandler(output, &slog.HandlerOptions{
+		ReplaceAttr: func(_ []string, attr slog.Attr) slog.Attr {
+			if attr.Key == slog.TimeKey {
+				return slog.Attr{}
+			}
+			return attr
+		},
+	}))
+}
+
+func onlyLogEntry(t *testing.T, output *bytes.Buffer) map[string]any {
+	t.Helper()
+
+	lines := strings.Split(strings.TrimSpace(output.String()), "\n")
+	if len(lines) != 1 || lines[0] == "" {
+		t.Fatalf("expected one JSON log line, got %q", output.String())
+	}
+
+	var entry map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &entry); err != nil {
+		t.Fatalf("decode JSON log entry: %v\n%s", err, lines[0])
+	}
+	return entry
 }
 
 func findTestCookie(t *testing.T, cookies []*http.Cookie, name string) *http.Cookie {
