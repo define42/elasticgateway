@@ -1,11 +1,14 @@
 package ldap
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
+	"log/slog"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -32,6 +35,35 @@ func TestUserSearchFilterEscapesMailValue(t *testing.T) {
 	}
 	if strings.Contains(got, `*)(|`) {
 		t.Fatalf("user search filter contains unescaped LDAP filter operators: %q", got)
+	}
+}
+
+func TestAccessFromGroupsLogsInvalidManagedNamespace(t *testing.T) {
+	var logOutput bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logOutput, &slog.HandlerOptions{
+		ReplaceAttr: func(_ []string, attr slog.Attr) slog.Attr {
+			if attr.Key == slog.TimeKey {
+				return slog.Attr{}
+			}
+			return attr
+		},
+	}))
+
+	groupDN := "cn=app_elk_team10-special_ingest,ou=groups,dc=glauth,dc=com"
+	access, user := accessFromGroups("johndoe", []string{groupDN}, "app_elk_", logger)
+	if len(access) != 0 || user != nil {
+		t.Fatalf("expected invalid managed namespace to be dropped, got access=%+v user=%+v", access, user)
+	}
+
+	entry := onlyLDAPLogEntry(t, &logOutput)
+	if entry["event"] != "ldap_managed_group_dropped" || entry["msg"] != "LDAP managed group dropped" || entry["level"] != "WARN" {
+		t.Fatalf("unexpected LDAP group-drop log entry: %#v", entry)
+	}
+	if entry["username"] != "johndoe" || entry["group"] != "app_elk_team10-special_ingest" || entry["group_dn"] != groupDN {
+		t.Fatalf("unexpected LDAP group-drop log fields: %#v", entry)
+	}
+	if entry["namespace"] != "team10-special" || entry["reason"] != "invalid_namespace" {
+		t.Fatalf("unexpected LDAP namespace drop reason: %#v", entry)
 	}
 }
 
@@ -111,4 +143,19 @@ func writeRootCAPEMFile(t *testing.T) string {
 		t.Fatalf("write root CA: %v", err)
 	}
 	return path
+}
+
+func onlyLDAPLogEntry(t *testing.T, output *bytes.Buffer) map[string]any {
+	t.Helper()
+
+	lines := strings.Split(strings.TrimSpace(output.String()), "\n")
+	if len(lines) != 1 || lines[0] == "" {
+		t.Fatalf("expected one JSON log line, got %q", output.String())
+	}
+
+	var entry map[string]any
+	if err := json.Unmarshal([]byte(lines[0]), &entry); err != nil {
+		t.Fatalf("decode JSON log entry: %v\n%s", err, lines[0])
+	}
+	return entry
 }

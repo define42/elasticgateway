@@ -771,6 +771,51 @@ func accessNamespaces(access []authz.Access) []string {
 	return namespaces
 }
 
+func accessLogMap(access []authz.Access) map[string]any {
+	effective := authz.NormalizeAccessByNamespace(access)
+	groupsByNamespace := accessGroupsByNamespace(access)
+	accessMap := make(map[string]any, len(effective))
+	for _, item := range effective {
+		namespace := strings.TrimSpace(item.Namespace)
+		if namespace == "" {
+			continue
+		}
+		accessMap[namespace] = map[string]any{
+			"groups":         groupsByNamespace[namespace],
+			"mode":           authz.RoleModeForAccess(item),
+			"pull_only":      item.PullOnly,
+			"delete_allowed": item.DeleteAllowed,
+		}
+	}
+	return accessMap
+}
+
+func accessGroupsByNamespace(access []authz.Access) map[string][]string {
+	seenByNamespace := make(map[string]map[string]struct{})
+	for _, item := range access {
+		namespace := strings.TrimSpace(item.Namespace)
+		group := strings.TrimSpace(item.Group)
+		if namespace == "" || group == "" {
+			continue
+		}
+		if seenByNamespace[namespace] == nil {
+			seenByNamespace[namespace] = make(map[string]struct{})
+		}
+		seenByNamespace[namespace][group] = struct{}{}
+	}
+
+	groupsByNamespace := make(map[string][]string, len(seenByNamespace))
+	for namespace, seen := range seenByNamespace {
+		groups := make([]string, 0, len(seen))
+		for group := range seen {
+			groups = append(groups, group)
+		}
+		sort.Strings(groups)
+		groupsByNamespace[namespace] = groups
+	}
+	return groupsByNamespace
+}
+
 func (g *Gateway) requestLogAttrs(r *http.Request) []any {
 	attrs := []any{
 		slog.String("method", r.Method),
@@ -784,37 +829,68 @@ func (g *Gateway) requestLogAttrs(r *http.Request) []any {
 }
 
 func (g *Gateway) authorizeIngestRequest(r *http.Request, indexName string) (string, error) {
-	access, err := g.ingestAccess(r)
+	username, access, err := g.ingestAccess(r)
 	if err != nil {
+		if errors.Is(err, ldappkg.ErrUnauthorized) {
+			g.logIngestAuthorizationDenied(r, username, indexName, access, err)
+		}
 		return "", err
 	}
 	namespace, ok := authz.ResolveIngestWriteNamespace(access, indexName)
 	if !ok {
+		g.logIngestAuthorizationDenied(r, username, indexName, access, errIngestForbidden)
 		return "", errIngestForbidden
 	}
 	return namespace, nil
 }
 
-func (g *Gateway) ingestAccess(r *http.Request) ([]authz.Access, error) {
+func (g *Gateway) logIngestAuthorizationDenied(r *http.Request, username, indexName string, access []authz.Access, err error) {
+	attrs := []any{
+		slog.String("event", "ingest_authorization_denied"),
+		slog.String("username", strings.TrimSpace(username)),
+		slog.String("requested_index", indexName),
+		slog.Int("http_status", http.StatusForbidden),
+		slog.Any("access_map", accessLogMap(access)),
+	}
+	attrs = append(attrs, g.requestLogAttrs(r)...)
+	if err != nil {
+		attrs = append(attrs,
+			slog.String("reason", ingestAuthorizationDenialReason(err)),
+			slog.String("error", err.Error()),
+		)
+	}
+
+	g.logger().WarnContext(r.Context(), "ingest authorization denied", attrs...)
+}
+
+func ingestAuthorizationDenialReason(err error) string {
+	if errors.Is(err, ldappkg.ErrUnauthorized) {
+		return "no_authorized_groups"
+	}
+	return "forbidden_index"
+}
+
+func (g *Gateway) ingestAccess(r *http.Request) (string, []authz.Access, error) {
 	if strings.TrimSpace(r.Header.Get("Authorization")) == "" {
 		if sessionData, ok := g.currentSession(r); ok {
-			return sessionData.Access, nil
+			return sessionLogUsername(sessionData), sessionData.Access, nil
 		}
-		return nil, errIngestAuthRequired
+		return "", nil, errIngestAuthRequired
 	}
 
 	username, password, ok := r.BasicAuth()
-	if !ok || strings.TrimSpace(username) == "" || password == "" {
-		return nil, errIngestAuthRequired
+	username = strings.TrimSpace(username)
+	if !ok || username == "" || password == "" {
+		return username, nil, errIngestAuthRequired
 	}
 
-	_, access, _, err := g.IngestAuthCache.Resolve(ingest.AuthCacheKey(strings.TrimSpace(username), password), func() (string, []authz.Access, error) {
-		return g.lookupIngestAccess(strings.TrimSpace(username), password)
+	cachedUsername, access, _, err := g.IngestAuthCache.Resolve(ingest.AuthCacheKey(username, password), func() (string, []authz.Access, error) {
+		return g.lookupIngestAccess(username, password)
 	})
 	if err != nil {
-		return nil, err
+		return username, nil, err
 	}
-	return access, nil
+	return cachedUsername, access, nil
 }
 
 func (g *Gateway) lookupIngestAccess(username, password string) (string, []authz.Access, error) {

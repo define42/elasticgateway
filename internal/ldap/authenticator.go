@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"strings"
 
@@ -56,7 +57,7 @@ func (a *Authenticator) AuthenticateAccess(username, password string) (*authz.Us
 	}
 
 	groups := entry.GetAttributeValues(a.cfg.GroupAttribute)
-	access, user := AccessFromGroups(username, groups, a.cfg.GroupNamePrefix)
+	access, user := accessFromGroups(username, groups, a.cfg.GroupNamePrefix, slog.Default())
 	if user == nil {
 		return nil, nil, fmt.Errorf("%w: %s", ErrUnauthorized, username)
 	}
@@ -147,6 +148,10 @@ func ldapServerName(rawURL string) string {
 
 // AccessFromGroups converts LDAP group DNs into gateway access entries.
 func AccessFromGroups(username string, groups []string, prefix string) ([]authz.Access, *authz.User) {
+	return accessFromGroups(username, groups, prefix, nil)
+}
+
+func accessFromGroups(username string, groups []string, prefix string, logger *slog.Logger) ([]authz.Access, *authz.User) {
 	var selected *authz.User
 	var access []authz.Access
 
@@ -165,6 +170,7 @@ func AccessFromGroups(username string, groups []string, prefix string) ([]authz.
 			continue
 		}
 		if !authz.ValidNamespace(ns) {
+			logDroppedManagedGroup(logger, username, g, groupName, ns)
 			continue
 		}
 
@@ -189,6 +195,21 @@ func AccessFromGroups(username string, groups []string, prefix string) ([]authz.
 	}
 
 	return access, selected
+}
+
+func logDroppedManagedGroup(logger *slog.Logger, username, groupDN, groupName, namespace string) {
+	if logger == nil {
+		return
+	}
+
+	logger.Warn("LDAP managed group dropped",
+		slog.String("event", "ldap_managed_group_dropped"),
+		slog.String("username", strings.TrimSpace(username)),
+		slog.String("group", groupName),
+		slog.String("group_dn", groupDN),
+		slog.String("namespace", namespace),
+		slog.String("reason", "invalid_namespace"),
+	)
 }
 
 // GroupNameFromDN extracts the leading CN or OU value from a group DN.

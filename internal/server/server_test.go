@@ -210,6 +210,70 @@ func TestGatewayLogsLoginFailureAsJSON(t *testing.T) {
 	}
 }
 
+func TestGatewayLogsIngestAuthorizationDenialAsJSON(t *testing.T) {
+	var logOutput bytes.Buffer
+	gateway := New(elasticpkg.NewClient(appconfig.Config{
+		TrustedProxies: []netip.Prefix{mustTestPrefix(t, "10.0.0.0/8")},
+	}), func(username, _ string) (*authz.User, []authz.Access, error) {
+		return &authz.User{Name: username}, []authz.Access{
+			{Group: "team1_user", Namespace: "team1", PullOnly: true},
+		}, nil
+	})
+	gateway.Logger = testJSONLogger(&logOutput)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("X-Forwarded-For", "203.0.113.7, 10.0.0.12")
+	request.RemoteAddr = "10.0.0.13:54321"
+	request.SetBasicAuth("alice", "secret")
+
+	gateway.Handler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusForbidden {
+		t.Fatalf("expected status 403, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+
+	assertIngestAuthorizationDenialLogEntry(t, &logOutput)
+}
+
+func assertIngestAuthorizationDenialLogEntry(t *testing.T, output *bytes.Buffer) {
+	t.Helper()
+
+	entry := onlyLogEntry(t, output)
+	if entry["event"] != "ingest_authorization_denied" || entry["msg"] != "ingest authorization denied" || entry["level"] != "WARN" {
+		t.Fatalf("unexpected ingest denial log entry: %#v", entry)
+	}
+	if entry["username"] != "alice" || entry["client_ip"] != "203.0.113.7" || entry["requested_index"] != "orders-demo" {
+		t.Fatalf("unexpected ingest denial log fields: %#v", entry)
+	}
+	if entry["http_status"] != float64(http.StatusForbidden) || entry["reason"] != "forbidden_index" {
+		t.Fatalf("unexpected ingest denial status/reason: %#v", entry)
+	}
+
+	assertIngestAuthorizationDenialAccessMap(t, entry)
+}
+
+func assertIngestAuthorizationDenialAccessMap(t *testing.T, entry map[string]any) {
+	t.Helper()
+
+	accessMap, ok := entry["access_map"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected structured access_map, got %#v", entry["access_map"])
+	}
+	teamAccess, ok := accessMap["team1"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected team1 access map entry, got %#v", accessMap)
+	}
+	groups, ok := teamAccess["groups"].([]any)
+	if !ok || len(groups) != 1 || groups[0] != "team1_user" {
+		t.Fatalf("unexpected team1 access groups: %#v", teamAccess["groups"])
+	}
+	if teamAccess["mode"] != "user" || teamAccess["pull_only"] != true || teamAccess["delete_allowed"] != false {
+		t.Fatalf("unexpected team1 access map entry: %#v", teamAccess)
+	}
+}
+
 func TestGatewayLogsUpstreamFailureDetailsAndReturnsGenericError(t *testing.T) {
 	var logOutput bytes.Buffer
 	elasticSearch := httptest.NewServer(upstreamFailureDetailsHandler(t))
