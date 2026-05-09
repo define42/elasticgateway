@@ -34,10 +34,11 @@ If two namespaces could match one ingest path, the longest namespace wins.
 
 ## Ingest Model
 
-All writes use:
+Writes use one of:
 
 ```text
 POST /ingest/<namespace>-<index>
+POST /ingest/<namespace>-<index>/_bulk
 ```
 
 The namespace prefix is the authorization boundary.
@@ -66,6 +67,12 @@ the gateway creates or uses:
 | Data view title | `team10-hello-*` |
 | Write alias | `team10-hello-20241230-rollover` |
 | First backing index | `team10-hello-20241230-rollover-000001` |
+
+Single-document ingest accepts one `application/json` object.
+Bulk ingest accepts Elasticsearch-style `application/x-ndjson` action/source pairs at `/_bulk`.
+Supported bulk actions are `index` and `create`.
+The gateway ignores any client-provided `_index` metadata and routes each source document to the write alias computed from that document's `event_time`; other metadata such as `_id` is forwarded.
+One bulk request can therefore write to multiple daily rollover aliases, and the gateway ensures each required alias before forwarding the request to Elasticsearch's `_bulk` API.
 
 ## Elastic Resources
 
@@ -100,6 +107,8 @@ For aliases that already exist, the gateway resolves the concrete write backing 
 `GET /demo` serves a browser form for sending test ingest requests.
 
 `POST /ingest/<namespace>-<index>` writes one JSON document to Elasticsearch. Authentication can be HTTP Basic auth with LDAP credentials or a gateway session cookie.
+
+`POST /ingest/<namespace>-<index>/_bulk` writes Elasticsearch-style NDJSON action/source pairs to Elasticsearch through the bulk API. Each source document must include `event_time`, and each source document is routed independently to its daily rollover alias.
 
 ## Configuration
 
@@ -192,6 +201,20 @@ curl -i http://localhost:8080/ingest/team10-hello \
   }'
 ```
 
+Example bulk write:
+
+```bash
+curl -i http://localhost:8080/ingest/team10-hello/_bulk \
+  -u ingestuser:dogood \
+  -H 'Content-Type: application/x-ndjson' \
+  --data-binary @- <<'NDJSON'
+{"index":{"_id":"hello-1"}}
+{"event_time":"2024-12-30T10:11:12Z","message":"hello from bulk"}
+{"create":{"_id":"hello-2"}}
+{"event_time":"2024-12-31T00:00:00Z","message":"another rollover day"}
+NDJSON
+```
+
 ## Running Without Docker
 
 ```bash
@@ -236,7 +259,6 @@ Repository layout:
 
 ## Limitations
 
-- Ingest is single-document only; there is no bulk API.
 - Shard and replica counts are currently hard-coded in the gateway config.
 - Kibana resource setup is synchronous; failed space or data-view creation fails the ingest before writing the document.
 - The service is built for namespace-prefixed index families, not arbitrary Elasticsearch indexing.

@@ -1586,6 +1586,120 @@ func TestGatewayIngestBootstrapsAndIndexes(t *testing.T) {
 	}
 }
 
+//nolint:cyclop,funlen,gocognit // Bulk ingest scenario verifies alias setup and NDJSON forwarding together.
+func TestGatewayBulkIngestIndexesDocuments(t *testing.T) {
+	t.Parallel()
+
+	var calls []string
+	var bulkLines []string
+
+	elasticSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.Path)
+
+		switch r.Method + " " + r.URL.Path {
+		case "HEAD /_alias/orders-demo-20241230-rollover":
+			w.WriteHeader(http.StatusNotFound)
+		case "PUT /orders-demo-20241230-rollover-000001":
+			w.WriteHeader(http.StatusCreated)
+			_, _ = io.WriteString(w, `{}`)
+		case "HEAD /_alias/orders-demo-20241231-rollover":
+			w.WriteHeader(http.StatusNotFound)
+		case "PUT /orders-demo-20241231-rollover-000001":
+			w.WriteHeader(http.StatusCreated)
+			_, _ = io.WriteString(w, `{}`)
+		case "POST /_bulk":
+			if contentType := r.Header.Get("Content-Type"); contentType != "application/x-ndjson" {
+				t.Fatalf("expected NDJSON bulk content type, got %q", contentType)
+			}
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				t.Fatalf("read bulk request body: %v", err)
+			}
+			bulkLines = strings.Split(strings.TrimSpace(string(body)), "\n")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"took":5,"errors":false,"items":[{"index":{"_index":"orders-demo-20241230-rollover","_id":"one","result":"created","status":201}},{"create":{"_index":"orders-demo-20241231-rollover","_id":"two","result":"created","status":201}}]}`)
+		default:
+			t.Fatalf("unexpected Elasticsearch request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer elasticSearch.Close()
+
+	body := strings.Join([]string{
+		`{"index":{"_id":"one","_index":"client-ignored"}}`,
+		`{"event_time":"2024-12-30T10:11:12Z","message":"hello"}`,
+		`{"create":{"_id":"two"}}`,
+		`{"event_time":"2024-12-31T00:00:00Z","message":"bye"}`,
+		``,
+	}, "\n")
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/ingest/orders-demo/_bulk", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/x-ndjson")
+	addTestIngestBasicAuth(request)
+
+	testGatewayHandler(testConfig(elasticSearch)).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if !reflect.DeepEqual(calls, []string{
+		"HEAD /_alias/orders-demo-20241230-rollover",
+		"PUT /orders-demo-20241230-rollover-000001",
+		"HEAD /_alias/orders-demo-20241231-rollover",
+		"PUT /orders-demo-20241231-rollover-000001",
+		"POST /_bulk",
+	}) {
+		t.Fatalf("unexpected Elasticsearch sequence: %#v", calls)
+	}
+	if len(bulkLines) != 4 {
+		t.Fatalf("expected 4 NDJSON lines, got %d: %#v", len(bulkLines), bulkLines)
+	}
+
+	indexAction := nestedMap(t, decodeJSONLine(t, bulkLines[0])["index"])
+	if got := indexAction["_index"]; got != "orders-demo-20241230-rollover" {
+		t.Fatalf("expected gateway-computed index for first action, got %#v", got)
+	}
+	if got := indexAction["_id"]; got != "one" {
+		t.Fatalf("expected first _id to be preserved, got %#v", got)
+	}
+	firstSource := decodeJSONLine(t, bulkLines[1])
+	if got := firstSource["event_time"]; got != "2024-12-30T10:11:12Z" {
+		t.Fatalf("unexpected first normalized event_time: %#v", got)
+	}
+	if got := firstSource["message"]; got != "hello" {
+		t.Fatalf("expected first arbitrary field to be preserved, got %#v", got)
+	}
+
+	createAction := nestedMap(t, decodeJSONLine(t, bulkLines[2])["create"])
+	if got := createAction["_index"]; got != "orders-demo-20241231-rollover" {
+		t.Fatalf("expected gateway-computed index for second action, got %#v", got)
+	}
+	if got := createAction["_id"]; got != "two" {
+		t.Fatalf("expected second _id to be preserved, got %#v", got)
+	}
+	secondSource := decodeJSONLine(t, bulkLines[3])
+	if got := secondSource["event_time"]; got != "2024-12-31T00:00:00Z" {
+		t.Fatalf("unexpected second normalized event_time: %#v", got)
+	}
+
+	var response serverpkg.BulkIngestResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if response.Documents != 2 || response.Took != 5 || response.Errors {
+		t.Fatalf("unexpected gateway response: %#v", response)
+	}
+	wantAliases := []string{"orders-demo-20241230-rollover", "orders-demo-20241231-rollover"}
+	if !reflect.DeepEqual(response.WriteAliases, wantAliases) {
+		t.Fatalf("unexpected write aliases: %#v", response.WriteAliases)
+	}
+	if !reflect.DeepEqual(response.BootstrappedAliases, wantAliases) {
+		t.Fatalf("unexpected bootstrapped aliases: %#v", response.BootstrappedAliases)
+	}
+	if len(response.Items) != 2 {
+		t.Fatalf("expected two bulk response items, got %#v", response.Items)
+	}
+}
+
 func TestGatewayRepeatWriteSkipsBootstrap(t *testing.T) {
 	t.Parallel()
 
@@ -2132,6 +2246,16 @@ func decodeRequestBody(t *testing.T, r *http.Request) map[string]any {
 	var payload map[string]any
 	if err := json.Unmarshal(body, &payload); err != nil {
 		t.Fatalf("decode request body %q: %v", string(body), err)
+	}
+	return payload
+}
+
+func decodeJSONLine(t *testing.T, line string) map[string]any {
+	t.Helper()
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(line), &payload); err != nil {
+		t.Fatalf("decode JSON line %q: %v", line, err)
 	}
 	return payload
 }

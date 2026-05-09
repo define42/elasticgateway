@@ -3,6 +3,7 @@
 package ingest
 
 import (
+	"bufio"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -24,6 +25,7 @@ const (
 	MaxIndexNameBytes = 255
 	rolloverSuffix    = "-rollover"
 	backingIndexSeed  = "-000001"
+	bulkPathSuffix    = "/_bulk"
 )
 
 var (
@@ -49,6 +51,14 @@ type AuthCacheStats struct {
 	Misses  uint64
 	Expired uint64
 	Entries uint64
+}
+
+// BulkDocument is one validated Elasticsearch bulk action/source pair.
+type BulkDocument struct {
+	Action   string
+	Metadata map[string]any
+	Document map[string]any
+	Line     int
 }
 
 type authCacheEntry struct {
@@ -202,6 +212,31 @@ func ParsePath(path string) (string, error) {
 	return indexName, nil
 }
 
+// ParseBulkPath validates and extracts the index name from /ingest/<index>/_bulk.
+func ParseBulkPath(path string) (string, error) {
+	if !strings.HasPrefix(path, "/ingest/") {
+		return "", ErrRouteNotFound
+	}
+
+	path = strings.TrimSuffix(path, "/")
+	if !strings.HasSuffix(path, bulkPathSuffix) {
+		return "", ErrRouteNotFound
+	}
+
+	indexName := strings.TrimPrefix(path, "/ingest/")
+	indexName = strings.TrimSuffix(indexName, bulkPathSuffix)
+	if indexName == "" {
+		return "", errors.New("path must be /ingest/<index>/_bulk")
+	}
+	if strings.Contains(indexName, "/") {
+		return "", errors.New("path must be /ingest/<index>/_bulk")
+	}
+	if !ValidIndexName(indexName) {
+		return "", errors.New("index name must start with a lowercase letter or digit and contain only lowercase letters, digits, '-' or '_'")
+	}
+	return indexName, nil
+}
+
 // DecodeJSONObject decodes exactly one top-level JSON object from body.
 func DecodeJSONObject(body io.Reader) (map[string]any, error) {
 	decoder := json.NewDecoder(body)
@@ -228,6 +263,110 @@ func DecodeJSONObject(body io.Reader) (map[string]any, error) {
 	}
 
 	return object, nil
+}
+
+// DecodeBulkNDJSON decodes Elasticsearch-style bulk index/create action pairs.
+func DecodeBulkNDJSON(body io.Reader) ([]BulkDocument, error) {
+	scanner := bufio.NewScanner(body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+
+	var docs []BulkDocument
+	lineNumber := 0
+	for {
+		actionLine, actionLineNumber, ok, err := nextNonEmptyBulkLine(scanner, &lineNumber)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			break
+		}
+
+		action, metadata, err := parseBulkActionLine(actionLine)
+		if err != nil {
+			return nil, fmt.Errorf("bulk action line %d: %w", actionLineNumber, err)
+		}
+
+		sourceLine, sourceLineNumber, ok, err := nextNonEmptyBulkLine(scanner, &lineNumber)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			return nil, fmt.Errorf("bulk action line %d has no source document", actionLineNumber)
+		}
+
+		document, err := parseBulkSourceLine(sourceLine)
+		if err != nil {
+			return nil, fmt.Errorf("bulk source line %d: %w", sourceLineNumber, err)
+		}
+		docs = append(docs, BulkDocument{
+			Action:   action,
+			Metadata: metadata,
+			Document: document,
+			Line:     sourceLineNumber,
+		})
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("read bulk body: %w", err)
+	}
+	if len(docs) == 0 {
+		return nil, errors.New("bulk body must contain at least one action/source pair")
+	}
+	return docs, nil
+}
+
+func nextNonEmptyBulkLine(scanner *bufio.Scanner, lineNumber *int) (string, int, bool, error) {
+	for scanner.Scan() {
+		*lineNumber++
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		return line, *lineNumber, true, nil
+	}
+	if err := scanner.Err(); err != nil {
+		return "", 0, false, fmt.Errorf("read bulk body: %w", err)
+	}
+	return "", 0, false, nil
+}
+
+func parseBulkActionLine(line string) (string, map[string]any, error) {
+	var value map[string]json.RawMessage
+	if err := json.Unmarshal([]byte(line), &value); err != nil {
+		return "", nil, fmt.Errorf("invalid action JSON: %w", err)
+	}
+	if len(value) != 1 {
+		return "", nil, errors.New("action must contain exactly one operation")
+	}
+
+	for action, rawMetadata := range value {
+		if action != "index" && action != "create" {
+			return "", nil, fmt.Errorf("unsupported action %q; only index and create are supported", action)
+		}
+
+		var metadata map[string]any
+		if len(rawMetadata) > 0 && string(rawMetadata) != "null" {
+			if err := json.Unmarshal(rawMetadata, &metadata); err != nil {
+				return "", nil, fmt.Errorf("invalid action metadata: %w", err)
+			}
+		}
+		if metadata == nil {
+			metadata = map[string]any{}
+		}
+		return action, metadata, nil
+	}
+	return "", nil, errors.New("action must contain an operation")
+}
+
+func parseBulkSourceLine(line string) (map[string]any, error) {
+	var document map[string]any
+	if err := json.Unmarshal([]byte(line), &document); err != nil {
+		return nil, fmt.Errorf("invalid source JSON: %w", err)
+	}
+	if document == nil {
+		return nil, errors.New("source document must be a JSON object")
+	}
+	return document, nil
 }
 
 // ParseEventTime validates and parses the required event_time field.

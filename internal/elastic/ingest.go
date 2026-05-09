@@ -1,7 +1,9 @@
 package elastic
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -60,6 +62,67 @@ func (c *Client) IndexDocument(ctx context.Context, alias string, document map[s
 	var response IndexDocumentResponse
 	if err := c.DoJSON(ctx, http.MethodPost, path, document, &response, []int{http.StatusOK, http.StatusCreated}); err != nil {
 		return IndexDocumentResponse{}, err
+	}
+	return response, nil
+}
+
+// BulkIndexDocuments indexes documents through Elasticsearch's _bulk API.
+func (c *Client) BulkIndexDocuments(ctx context.Context, docs []BulkIndexDocument) (BulkIndexResponse, error) {
+	var body bytes.Buffer
+	for _, doc := range docs {
+		action := strings.TrimSpace(doc.Action)
+		if action == "" {
+			action = "index"
+		}
+
+		metadata := make(map[string]any, len(doc.Metadata)+1)
+		for key, value := range doc.Metadata {
+			metadata[key] = value
+		}
+		metadata["_index"] = doc.Index
+
+		actionLine, err := json.Marshal(map[string]any{action: metadata})
+		if err != nil {
+			return BulkIndexResponse{}, err
+		}
+		sourceLine, err := json.Marshal(doc.Document)
+		if err != nil {
+			return BulkIndexResponse{}, err
+		}
+
+		body.Write(actionLine)
+		body.WriteByte('\n')
+		body.Write(sourceLine)
+		body.WriteByte('\n')
+	}
+
+	req, err := c.NewRequest(ctx, http.MethodPost, "/_bulk", bytes.NewReader(body.Bytes()))
+	if err != nil {
+		return BulkIndexResponse{}, err
+	}
+	req.Header.Set("Content-Type", "application/x-ndjson")
+
+	resp, err := c.Config.HTTPClient.Do(req)
+	if err != nil {
+		return BulkIndexResponse{}, err
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		return BulkIndexResponse{}, &ResponseError{
+			Method:     http.MethodPost,
+			Path:       "/_bulk",
+			StatusCode: resp.StatusCode,
+			Body:       strings.TrimSpace(string(b)),
+		}
+	}
+
+	var response BulkIndexResponse
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return BulkIndexResponse{}, err
 	}
 	return response, nil
 }

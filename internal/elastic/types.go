@@ -49,6 +49,30 @@ type IndexDocumentResponse struct {
 	Result string `json:"result"`
 }
 
+// BulkIndexDocument is one document to send through Elasticsearch _bulk.
+type BulkIndexDocument struct {
+	Action   string
+	Index    string
+	Metadata map[string]any
+	Document map[string]any
+}
+
+// BulkIndexResponse captures the Elasticsearch bulk API response.
+type BulkIndexResponse struct {
+	Took   int                         `json:"took,omitempty"`
+	Errors bool                        `json:"errors"`
+	Items  []map[string]BulkItemResult `json:"items"`
+}
+
+// BulkItemResult captures the subset of each bulk item returned to callers.
+type BulkItemResult struct {
+	Index  string `json:"_index,omitempty"`
+	ID     string `json:"_id,omitempty"`
+	Result string `json:"result,omitempty"`
+	Status int    `json:"status,omitempty"`
+	Error  any    `json:"error,omitempty"`
+}
+
 // AliasResponse captures the Elasticsearch alias lookup payload by backing index.
 type AliasResponse map[string]AliasIndexInfo
 

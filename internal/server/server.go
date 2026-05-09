@@ -13,6 +13,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
 	"time"
 
@@ -66,6 +67,16 @@ type IngestResponse struct {
 	WriteAlias   string `json:"write_alias"`
 	DocumentID   string `json:"document_id"`
 	Bootstrapped bool   `json:"bootstrapped"`
+}
+
+// BulkIngestResponse is returned after a successful bulk ingest request.
+type BulkIngestResponse struct {
+	Took                int                                 `json:"took,omitempty"`
+	Errors              bool                                `json:"errors"`
+	Documents           int                                 `json:"documents"`
+	WriteAliases        []string                            `json:"write_aliases"`
+	BootstrappedAliases []string                            `json:"bootstrapped_write_aliases,omitempty"`
+	Items               []map[string]elastic.BulkItemResult `json:"items"`
 }
 
 // ErrorResponse is the JSON error envelope used by the gateway.
@@ -328,6 +339,11 @@ func (g *Gateway) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g *Gateway) handleIngest(w http.ResponseWriter, r *http.Request) {
+	if isBulkIngestPath(r.URL.Path) {
+		g.handleBulkIngest(w, r)
+		return
+	}
+
 	indexName, err := ingest.ParsePath(r.URL.Path)
 	if err != nil {
 		writeIngestPathError(w, r, err)
@@ -374,6 +390,65 @@ func (g *Gateway) handleIngest(w http.ResponseWriter, r *http.Request) {
 		WriteAlias:   writeAlias,
 		DocumentID:   indexed.ID,
 		Bootstrapped: bootstrapped,
+	})
+}
+
+func (g *Gateway) handleBulkIngest(w http.ResponseWriter, r *http.Request) {
+	indexName, err := ingest.ParseBulkPath(r.URL.Path)
+	if err != nil {
+		writeIngestPathError(w, r, err)
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		w.Header().Set("Allow", http.MethodPost)
+		writeErrorJSON(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+
+	spaceName, err := g.authorizeIngestRequest(r, indexName)
+	if err != nil {
+		writeIngestAuthError(w, err)
+		return
+	}
+
+	documents, status, err := decodeBulkIngestDocuments(r, indexName)
+	if err != nil {
+		writeErrorJSON(w, status, err.Error())
+		return
+	}
+
+	if err := g.Client.EnsureKibanaDataView(r.Context(), spaceName, indexName); err != nil {
+		writeErrorJSON(w, http.StatusBadGateway, fmt.Sprintf("Kibana setup failed: %v", err))
+		return
+	}
+
+	aliases := bulkWriteAliases(documents)
+	bootstrappedAliases := make([]string, 0, len(aliases))
+	for _, alias := range aliases {
+		bootstrapped, err := g.Client.EnsureWriteAlias(r.Context(), alias)
+		if err != nil {
+			writeErrorJSON(w, http.StatusBadGateway, fmt.Sprintf("Elasticsearch bootstrap failed: %v", err))
+			return
+		}
+		if bootstrapped {
+			bootstrappedAliases = append(bootstrappedAliases, alias)
+		}
+	}
+
+	indexed, err := g.Client.BulkIndexDocuments(r.Context(), documents)
+	if err != nil {
+		writeErrorJSON(w, http.StatusBadGateway, fmt.Sprintf("Elasticsearch bulk ingest failed: %v", err))
+		return
+	}
+
+	writeJSON(w, http.StatusOK, BulkIngestResponse{
+		Took:                indexed.Took,
+		Errors:              indexed.Errors,
+		Documents:           len(documents),
+		WriteAliases:        aliases,
+		BootstrappedAliases: bootstrappedAliases,
+		Items:               indexed.Items,
 	})
 }
 
@@ -464,6 +539,10 @@ func writeIngestAuthError(w http.ResponseWriter, err error) {
 	}
 }
 
+func isBulkIngestPath(path string) bool {
+	return strings.HasSuffix(strings.TrimSuffix(path, "/"), "/_bulk")
+}
+
 func decodeIngestDocument(r *http.Request, indexName string) (map[string]any, string, int, error) {
 	mediaType := strings.TrimSpace(r.Header.Get("Content-Type"))
 	contentType, _, err := mimeParse(mediaType)
@@ -489,6 +568,65 @@ func decodeIngestDocument(r *http.Request, indexName string) (map[string]any, st
 
 	document["event_time"] = eventTime.UTC().Format(time.RFC3339)
 	return document, writeAlias, 0, nil
+}
+
+func decodeBulkIngestDocuments(r *http.Request, indexName string) ([]elastic.BulkIndexDocument, int, error) {
+	mediaType := strings.TrimSpace(r.Header.Get("Content-Type"))
+	contentType, _, err := mimeParse(mediaType)
+	if err != nil || contentType != "application/x-ndjson" {
+		return nil, http.StatusUnsupportedMediaType, errors.New("content type must be application/x-ndjson")
+	}
+
+	decoded, err := ingest.DecodeBulkNDJSON(r.Body)
+	if err != nil {
+		return nil, http.StatusBadRequest, err
+	}
+
+	documents := make([]elastic.BulkIndexDocument, 0, len(decoded))
+	for _, item := range decoded {
+		writeAlias, err := normalizeIngestDocument(indexName, item.Document)
+		if err != nil {
+			return nil, http.StatusBadRequest, fmt.Errorf("bulk source line %d: %w", item.Line, err)
+		}
+
+		documents = append(documents, elastic.BulkIndexDocument{
+			Action:   item.Action,
+			Index:    writeAlias,
+			Metadata: item.Metadata,
+			Document: item.Document,
+		})
+	}
+	return documents, 0, nil
+}
+
+func normalizeIngestDocument(indexName string, document map[string]any) (string, error) {
+	eventTime, err := ingest.ParseEventTime(document)
+	if err != nil {
+		return "", err
+	}
+
+	writeAlias := ingest.BuildWriteAlias(indexName, eventTime)
+	firstIndex := ingest.BuildFirstBackingIndex(writeAlias)
+	if len(writeAlias) > ingest.MaxIndexNameBytes || len(firstIndex) > ingest.MaxIndexNameBytes {
+		return "", errors.New("generated alias or backing index name exceeds Elasticsearch limits")
+	}
+
+	document["event_time"] = eventTime.UTC().Format(time.RFC3339)
+	return writeAlias, nil
+}
+
+func bulkWriteAliases(documents []elastic.BulkIndexDocument) []string {
+	seen := make(map[string]struct{}, len(documents))
+	for _, document := range documents {
+		seen[document.Index] = struct{}{}
+	}
+
+	aliases := make([]string, 0, len(seen))
+	for alias := range seen {
+		aliases = append(aliases, alias)
+	}
+	sort.Strings(aliases)
+	return aliases
 }
 
 func mimeParse(mediaType string) (string, map[string]string, error) {
