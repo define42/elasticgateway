@@ -39,8 +39,9 @@ type Session struct {
 
 const (
 	// SessionCookieName is the cookie that carries the gateway session token.
-	SessionCookieName = "elasticgateway_session"
-	kibanaBasePath    = "/kibana"
+	SessionCookieName               = "elasticgateway_session"
+	kibanaBasePath                  = "/kibana"
+	maxIngestRequestBodyBytes int64 = 512 * 1024 * 1024
 )
 
 var (
@@ -329,7 +330,7 @@ func (g *Gateway) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 			status = http.StatusForbidden
 			message = "this account cannot be used for gateway login"
 		}
-		log.Printf("failed to provision login user %q: %v", username, err)
+		log.Printf("failed to provision login user: %v", err)
 		g.RenderLoginPage(w, status, LoginPageData{
 			Error:    message,
 			Username: username,
@@ -369,7 +370,7 @@ func (g *Gateway) handleIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	document, writeAlias, status, err := decodeIngestDocument(r, indexName)
+	document, writeAlias, status, err := decodeIngestDocument(w, r, indexName)
 	if err != nil {
 		writeErrorJSON(w, status, err.Error())
 		return
@@ -419,7 +420,7 @@ func (g *Gateway) handleBulkIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	documents, status, err := decodeBulkIngestDocuments(r, indexName)
+	documents, status, err := decodeBulkIngestDocuments(w, r, indexName)
 	if err != nil {
 		writeErrorJSON(w, status, err.Error())
 		return
@@ -551,15 +552,27 @@ func isBulkIngestPath(path string) bool {
 	return strings.HasSuffix(strings.TrimSuffix(path, "/"), "/_bulk")
 }
 
-func decodeIngestDocument(r *http.Request, indexName string) (map[string]any, string, int, error) {
+func decodeIngestDocument(w http.ResponseWriter, r *http.Request, indexName string) (map[string]any, string, int, error) {
+	return decodeIngestDocumentWithLimit(w, r, indexName, maxIngestRequestBodyBytes)
+}
+
+func decodeIngestDocumentWithLimit(w http.ResponseWriter, r *http.Request, indexName string, maxBodyBytes int64) (map[string]any, string, int, error) {
 	mediaType := strings.TrimSpace(r.Header.Get("Content-Type"))
 	contentType, _, err := mimeParse(mediaType)
 	if err != nil || contentType != "application/json" {
 		return nil, "", http.StatusUnsupportedMediaType, errors.New("content type must be application/json")
 	}
 
-	document, err := ingest.DecodeJSONObject(r.Body)
+	body, err := limitedIngestBody(w, r, maxBodyBytes)
 	if err != nil {
+		return nil, "", http.StatusRequestEntityTooLarge, err
+	}
+
+	document, err := ingest.DecodeJSONObject(body)
+	if err != nil {
+		if isRequestBodyTooLarge(err) {
+			return nil, "", http.StatusRequestEntityTooLarge, requestBodyTooLargeError(maxBodyBytes)
+		}
 		return nil, "", http.StatusBadRequest, err
 	}
 
@@ -578,15 +591,27 @@ func decodeIngestDocument(r *http.Request, indexName string) (map[string]any, st
 	return document, writeAlias, 0, nil
 }
 
-func decodeBulkIngestDocuments(r *http.Request, indexName string) ([]elastic.BulkIndexDocument, int, error) {
+func decodeBulkIngestDocuments(w http.ResponseWriter, r *http.Request, indexName string) ([]elastic.BulkIndexDocument, int, error) {
+	return decodeBulkIngestDocumentsWithLimit(w, r, indexName, maxIngestRequestBodyBytes)
+}
+
+func decodeBulkIngestDocumentsWithLimit(w http.ResponseWriter, r *http.Request, indexName string, maxBodyBytes int64) ([]elastic.BulkIndexDocument, int, error) {
 	mediaType := strings.TrimSpace(r.Header.Get("Content-Type"))
 	contentType, _, err := mimeParse(mediaType)
 	if err != nil || contentType != "application/x-ndjson" {
 		return nil, http.StatusUnsupportedMediaType, errors.New("content type must be application/x-ndjson")
 	}
 
-	decoded, err := ingest.DecodeBulkNDJSON(r.Body)
+	body, err := limitedIngestBody(w, r, maxBodyBytes)
 	if err != nil {
+		return nil, http.StatusRequestEntityTooLarge, err
+	}
+
+	decoded, err := ingest.DecodeBulkNDJSON(body)
+	if err != nil {
+		if isRequestBodyTooLarge(err) {
+			return nil, http.StatusRequestEntityTooLarge, requestBodyTooLargeError(maxBodyBytes)
+		}
 		return nil, http.StatusBadRequest, err
 	}
 
@@ -605,6 +630,31 @@ func decodeBulkIngestDocuments(r *http.Request, indexName string) ([]elastic.Bul
 		})
 	}
 	return documents, 0, nil
+}
+
+func limitedIngestBody(w http.ResponseWriter, r *http.Request, maxBodyBytes int64) (io.Reader, error) {
+	if r.ContentLength > maxBodyBytes {
+		return nil, requestBodyTooLargeError(maxBodyBytes)
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	return r.Body, nil
+}
+
+func isRequestBodyTooLarge(err error) bool {
+	var maxBytesError *http.MaxBytesError
+	return errors.As(err, &maxBytesError)
+}
+
+func requestBodyTooLargeError(maxBodyBytes int64) error {
+	return fmt.Errorf("request body exceeds %s limit", byteLimitLabel(maxBodyBytes))
+}
+
+func byteLimitLabel(maxBodyBytes int64) string {
+	const bytesPerMegabyte = 1024 * 1024
+	if maxBodyBytes%bytesPerMegabyte == 0 {
+		return fmt.Sprintf("%d MB", maxBodyBytes/bytesPerMegabyte)
+	}
+	return fmt.Sprintf("%d bytes", maxBodyBytes)
 }
 
 func normalizeIngestDocument(indexName string, document map[string]any) (string, error) {

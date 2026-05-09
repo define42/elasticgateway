@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/define42/elasticgateway/internal/authz"
@@ -69,6 +70,68 @@ func TestKibanaProxyForceSecureCookiesForwardsHTTPS(t *testing.T) {
 	}
 	if forwardedProto != "https" {
 		t.Fatalf("expected forced X-Forwarded-Proto https, got %q", forwardedProto)
+	}
+}
+
+func TestDecodeIngestDocumentRejectsContentLengthOverLimit(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.ContentLength = maxIngestRequestBodyBytes + 1
+
+	_, _, status, err := decodeIngestDocument(recorder, request, "orders-demo")
+
+	if status != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected status 413, got %d", status)
+	}
+	if err == nil || !strings.Contains(err.Error(), "512 MB") {
+		t.Fatalf("expected 512 MB limit error, got %v", err)
+	}
+}
+
+func TestDecodeIngestDocumentsReturnRequestEntityTooLargeAfterReadingPastLimit(t *testing.T) {
+	tests := []struct {
+		name        string
+		contentType string
+		body        string
+		decode      func(http.ResponseWriter, *http.Request) (int, error)
+	}{
+		{
+			name:        "single document",
+			contentType: "application/json",
+			body:        `{"event_time":"2024-12-30T10:11:12Z"}`,
+			decode: func(w http.ResponseWriter, r *http.Request) (int, error) {
+				_, _, status, err := decodeIngestDocumentWithLimit(w, r, "orders-demo", 8)
+				return status, err
+			},
+		},
+		{
+			name:        "bulk",
+			contentType: "application/x-ndjson",
+			body:        "{\"index\":{}}\n{\"event_time\":\"2024-12-30T10:11:12Z\"}\n",
+			decode: func(w http.ResponseWriter, r *http.Request) (int, error) {
+				_, status, err := decodeBulkIngestDocumentsWithLimit(w, r, "orders-demo", 8)
+				return status, err
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodPost, "/ingest/orders-demo", strings.NewReader(tt.body))
+			request.Header.Set("Content-Type", tt.contentType)
+			request.ContentLength = -1
+
+			status, err := tt.decode(recorder, request)
+
+			if status != http.StatusRequestEntityTooLarge {
+				t.Fatalf("expected status 413, got %d", status)
+			}
+			if err == nil || !strings.Contains(err.Error(), "8 bytes") {
+				t.Fatalf("expected 8-byte limit error, got %v", err)
+			}
+		})
 	}
 }
 

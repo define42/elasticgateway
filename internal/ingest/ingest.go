@@ -318,6 +318,9 @@ func DecodeBulkNDJSON(body io.Reader) ([]BulkDocument, error) {
 func nextNonEmptyBulkLine(scanner *bufio.Scanner, lineNumber *int) (string, int, bool, error) {
 	for scanner.Scan() {
 		*lineNumber++
+		if err := scanner.Err(); err != nil {
+			return "", 0, false, fmt.Errorf("read bulk body: %w", err)
+		}
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
