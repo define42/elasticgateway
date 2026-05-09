@@ -1,12 +1,14 @@
 # ---------- build stage ----------
-FROM golang:1.26-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS builder
+
+ARG TARGETOS TARGETARCH
 
 WORKDIR /app
 
 # Enable static binary
 ENV CGO_ENABLED=0 \
-    GOOS=linux \
-    GOARCH=amd64
+    GOOS=$TARGETOS \
+    GOARCH=$TARGETARCH
 
 # Copy module files first (better caching)
 COPY go.mod go.sum  ./
