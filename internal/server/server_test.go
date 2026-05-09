@@ -5,8 +5,10 @@ import (
 	"html/template"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/define42/elasticgateway/internal/authz"
 	appconfig "github.com/define42/elasticgateway/internal/config"
@@ -24,6 +26,25 @@ func TestSessionCookieSecureHonorsForceSecureCookies(t *testing.T) {
 	cookie := findTestCookie(t, recorder.Result().Cookies(), SessionCookieName)
 	if !cookie.Secure {
 		t.Fatalf("expected forced secure session cookie, got %#v", cookie)
+	}
+}
+
+func TestSessionCookieMaxAgeHonorsSessionTTL(t *testing.T) {
+	gateway := New(elasticpkg.NewClient(appconfig.Config{SessionTTL: 90 * time.Minute}), nil)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/login", nil)
+
+	gateway.setSessionCookie(recorder, request, Session{User: &authz.User{Name: "alice"}})
+
+	cookie := findTestCookie(t, recorder.Result().Cookies(), SessionCookieName)
+	if cookie.MaxAge != 5400 {
+		t.Fatalf("expected browser cookie max age 5400 seconds, got %d", cookie.MaxAge)
+	}
+
+	maxAge := reflect.ValueOf(gateway.SecureCookie).Elem().FieldByName("maxAge").Int()
+	if maxAge != 5400 {
+		t.Fatalf("expected securecookie max age 5400 seconds, got %d", maxAge)
 	}
 }
 

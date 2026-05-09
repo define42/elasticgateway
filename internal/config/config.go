@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -18,6 +19,8 @@ const (
 	DefaultKibanaURL = "http://localhost:5601"
 	// DefaultUsername is the default upstream admin username.
 	DefaultUsername = "elastic"
+	// DefaultSessionTTL is the default gateway session lifetime.
+	DefaultSessionTTL = 24 * time.Hour
 )
 
 // Config contains runtime settings for Elasticsearch, Kibana, and HTTP serving.
@@ -29,6 +32,7 @@ type Config struct {
 	KibanaUsername        string
 	KibanaPassword        string
 	SessionSecret         string
+	SessionTTL            time.Duration
 	ForceSecureCookies    bool
 	ListenAddr            string
 	Shards                int
@@ -73,6 +77,7 @@ func LoadGateway() Config {
 		KibanaUsername:        getEnv("KIBANA_USERNAME", getEnv("ELASTICSEARCH_USERNAME", DefaultUsername)),
 		KibanaPassword:        getEnv("KIBANA_PASSWORD", getEnv("ELASTICSEARCH_PASSWORD", defaultPassword)),
 		SessionSecret:         getEnv("SESSION_SECRET", ""),
+		SessionTTL:            getEnvDuration("SESSION_TTL", DefaultSessionTTL),
 		ForceSecureCookies:    getEnvBool("FORCE_SECURE_COOKIES", false),
 		ListenAddr:            getEnv("LISTEN_ADDR", DefaultListenAddr),
 		Shards:                1,
@@ -106,6 +111,21 @@ func getEnvBool(key string, def bool) bool {
 	if value, ok := os.LookupEnv(key); ok {
 		value = strings.ToLower(strings.TrimSpace(value))
 		return value == "1" || value == "true" || value == "yes"
+	}
+	return def
+}
+
+func getEnvDuration(key string, def time.Duration) time.Duration {
+	if value, ok := os.LookupEnv(key); ok {
+		value = strings.TrimSpace(value)
+		duration, err := time.ParseDuration(value)
+		if err == nil && duration > 0 {
+			return duration
+		}
+		seconds, err := strconv.Atoi(value)
+		if err == nil && seconds > 0 {
+			return time.Duration(seconds) * time.Second
+		}
 	}
 	return def
 }

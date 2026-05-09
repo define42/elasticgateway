@@ -125,6 +125,7 @@ Configuration is environment based.
 | `KIBANA_USERNAME` | `ELASTICSEARCH_USERNAME` or `elastic` | Kibana API username |
 | `KIBANA_PASSWORD` | `ELASTICSEARCH_PASSWORD` or `ELASTIC_PASSWORD` or empty | Kibana API password |
 | `SESSION_SECRET` | generated at process start | Shared secret used to sign and encrypt gateway session cookies |
+| `SESSION_TTL` | `24h` | Gateway session lifetime, parsed as a Go duration such as `8h` or `30m`, or as seconds |
 | `FORCE_SECURE_COOKIES` | `false` | Always set the session cookie `Secure` flag and send `X-Forwarded-Proto: https` to Kibana, for TLS-terminating load balancers |
 | `LDAP_URL` | `ldaps://ldap:389` | LDAP server URL |
 | `LDAP_BASE_DN` | `dc=glauth,dc=com` | LDAP search base |

@@ -46,6 +46,26 @@ func TestLoadGatewayReadsSessionSecret(t *testing.T) {
 	}
 }
 
+func TestLoadGatewayReadsSessionTTL(t *testing.T) {
+	t.Run("duration", func(t *testing.T) {
+		t.Setenv("SESSION_TTL", "2h30m")
+
+		cfg := appconfig.LoadGateway()
+		if cfg.SessionTTL != 150*time.Minute {
+			t.Fatalf("unexpected session ttl: %v", cfg.SessionTTL)
+		}
+	})
+
+	t.Run("seconds", func(t *testing.T) {
+		t.Setenv("SESSION_TTL", "3600")
+
+		cfg := appconfig.LoadGateway()
+		if cfg.SessionTTL != time.Hour {
+			t.Fatalf("unexpected session ttl: %v", cfg.SessionTTL)
+		}
+	})
+}
+
 func TestLoadGatewayReadsForceSecureCookies(t *testing.T) {
 	t.Setenv("FORCE_SECURE_COOKIES", "true")
 
@@ -633,8 +653,9 @@ func TestDecodeAndSessionHelpersCoverage(t *testing.T) {
 	t.Run("secure cookie max age matches browser cookie", func(t *testing.T) {
 		gateway := newTestGateway(elasticpkg.NewClient(appconfig.Config{}), nil)
 		maxAge := reflect.ValueOf(gateway.SecureCookie).Elem().FieldByName("maxAge").Int()
-		if maxAge != 86400 {
-			t.Fatalf("expected securecookie server-side max age to be 86400 seconds, got %d", maxAge)
+		want := int64(appconfig.DefaultSessionTTL / time.Second)
+		if maxAge != want {
+			t.Fatalf("expected securecookie server-side max age to be %d seconds, got %d", want, maxAge)
 		}
 	})
 

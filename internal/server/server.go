@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/define42/elasticgateway/internal/authz"
+	appconfig "github.com/define42/elasticgateway/internal/config"
 	"github.com/define42/elasticgateway/internal/elastic"
 	"github.com/define42/elasticgateway/internal/ingest"
 	ldappkg "github.com/define42/elasticgateway/internal/ldap"
@@ -30,8 +31,8 @@ import (
 // every per-request fact the gateway needs to authorize the user and proxy
 // Kibana, so the gateway can scale horizontally without a shared session
 // store: the cookie itself is the session. Expiry is enforced by
-// gorilla/securecookie's MaxAge (default 24h) at decode time, so no timing
-// fields are tracked here.
+// gorilla/securecookie's configured MaxAge at decode time, so no timing fields
+// are tracked here.
 type Session struct {
 	User       *authz.User
 	Access     []authz.Access
@@ -62,6 +63,7 @@ type Gateway struct {
 	SecureCookie    *securecookie.SecureCookie
 	kibanaTarget    *url.URL
 	kibanaTargetErr error
+	sessionMaxAge   int
 }
 
 // LoginPageData is the template model for the login form.
@@ -102,31 +104,33 @@ func New(client *elastic.Client, authenticate AuthenticateFunc) *Gateway {
 	}
 
 	kibanaTarget, kibanaTargetErr := url.Parse(client.Config.KibanaURL)
+	sessionMaxAge := sessionCookieMaxAgeSeconds(client.Config.SessionTTL)
 
 	return &Gateway{
 		Client:          client,
 		Authenticate:    authenticate,
 		IngestAuthCache: ingest.NewAuthCache(),
-		SecureCookie:    newSecureCookie(client.Config.SessionSecret),
+		SecureCookie:    newSecureCookie(client.Config.SessionSecret, sessionMaxAge),
 		kibanaTarget:    kibanaTarget,
 		kibanaTargetErr: kibanaTargetErr,
+		sessionMaxAge:   sessionMaxAge,
 	}
 }
 
 // newSecureCookie builds a securecookie codec. With no configured secret,
 // keys are generated per process so cookies do not survive a restart.
-func newSecureCookie(sessionSecret string) *securecookie.SecureCookie {
+func newSecureCookie(sessionSecret string, sessionMaxAge int) *securecookie.SecureCookie {
 	sessionSecret = strings.TrimSpace(sessionSecret)
 	if sessionSecret != "" {
 		return securecookie.New(
 			deriveSessionHashKey(sessionSecret),
 			deriveSessionBlockKey(sessionSecret),
-		).MaxAge(sessionCookieMaxAgeSeconds)
+		).MaxAge(sessionMaxAge)
 	}
 
 	hashKey := securecookie.GenerateRandomKey(64)
 	blockKey := securecookie.GenerateRandomKey(32)
-	return securecookie.New(hashKey, blockKey).MaxAge(sessionCookieMaxAgeSeconds)
+	return securecookie.New(hashKey, blockKey).MaxAge(sessionMaxAge)
 }
 
 func deriveSessionHashKey(sessionSecret string) []byte {
@@ -572,7 +576,7 @@ func decodeIngestDocument(w http.ResponseWriter, r *http.Request, indexName stri
 
 func decodeIngestDocumentWithLimit(w http.ResponseWriter, r *http.Request, indexName string, maxBodyBytes int64) (map[string]any, string, int, error) {
 	mediaType := strings.TrimSpace(r.Header.Get("Content-Type"))
-	contentType, _, err := mimeParse(mediaType)
+	contentType, _, err := mime.ParseMediaType(mediaType)
 	if err != nil || contentType != "application/json" {
 		return nil, "", http.StatusUnsupportedMediaType, errors.New("content type must be application/json")
 	}
@@ -611,7 +615,7 @@ func decodeBulkIngestDocuments(w http.ResponseWriter, r *http.Request, indexName
 
 func decodeBulkIngestDocumentsWithLimit(w http.ResponseWriter, r *http.Request, indexName string, maxBodyBytes int64) ([]elastic.BulkIndexDocument, int, error) {
 	mediaType := strings.TrimSpace(r.Header.Get("Content-Type"))
-	contentType, _, err := mimeParse(mediaType)
+	contentType, _, err := mime.ParseMediaType(mediaType)
 	if err != nil || contentType != "application/x-ndjson" {
 		return nil, http.StatusUnsupportedMediaType, errors.New("content type must be application/x-ndjson")
 	}
@@ -701,10 +705,6 @@ func bulkWriteAliases(documents []elastic.BulkIndexDocument) []string {
 	return aliases
 }
 
-func mimeParse(mediaType string) (string, map[string]string, error) {
-	return mime.ParseMediaType(mediaType)
-}
-
 // currentSession decodes the session cookie attached to r, returning the
 // session and true if the cookie is present and well-formed. Expiry is
 // enforced inside the cookie codec (gorilla/securecookie's MaxAge), which
@@ -747,14 +747,20 @@ func (g *Gateway) setSessionCookie(w http.ResponseWriter, r *http.Request, s Ses
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
 		Secure:   g.sessionCookieSecure(r),
-		MaxAge:   sessionCookieMaxAgeSeconds,
+		MaxAge:   g.sessionMaxAge,
 	})
 }
 
-// sessionCookieMaxAgeSeconds is the shared browser-side and server-side
-// session lifetime, so the browser drops the cookie when the gateway stops
-// accepting it.
-const sessionCookieMaxAgeSeconds = 86400
+func sessionCookieMaxAgeSeconds(sessionTTL time.Duration) int {
+	if sessionTTL <= 0 {
+		sessionTTL = appconfig.DefaultSessionTTL
+	}
+	seconds := int(sessionTTL / time.Second)
+	if sessionTTL%time.Second != 0 {
+		seconds++
+	}
+	return seconds
+}
 
 func (g *Gateway) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 	// #nosec G124 -- Secure mirrors setSessionCookie so local HTTP development can still clear sessions correctly.
