@@ -39,9 +39,10 @@ type Session struct {
 
 const (
 	// SessionCookieName is the cookie that carries the gateway session token.
-	SessionCookieName               = "elasticgateway_session"
-	kibanaBasePath                  = "/kibana"
-	maxIngestRequestBodyBytes int64 = 512 * 1024 * 1024
+	SessionCookieName                    = "elasticgateway_session"
+	kibanaBasePath                       = "/kibana"
+	invalidLoginCredentialsMessage       = "invalid username or password"
+	maxIngestRequestBodyBytes      int64 = 512 * 1024 * 1024
 )
 
 var (
@@ -474,10 +475,10 @@ func (g *Gateway) RenderLoginPage(w http.ResponseWriter, status int, data LoginP
 
 func loginErrorResponse(err error) (int, string) {
 	switch {
-	case errors.Is(err, ldappkg.ErrInvalidCredentials), errors.Is(err, ldappkg.ErrUserNotFound):
-		return http.StatusUnauthorized, "invalid username or password"
-	case errors.Is(err, ldappkg.ErrUnauthorized):
-		return http.StatusForbidden, "your LDAP account does not grant access to Kibana"
+	case errors.Is(err, ldappkg.ErrInvalidCredentials),
+		errors.Is(err, ldappkg.ErrUserNotFound),
+		errors.Is(err, ldappkg.ErrUnauthorized):
+		return http.StatusUnauthorized, invalidLoginCredentialsMessage
 	default:
 		log.Printf("LDAP authentication failed: %v", err)
 		return http.StatusBadGateway, "LDAP authentication failed"

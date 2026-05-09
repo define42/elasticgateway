@@ -565,12 +565,15 @@ func TestGatewayLoginInvalidCredentialsReturnsUnauthorized(t *testing.T) {
 	if recorder.Code != http.StatusUnauthorized {
 		t.Fatalf("expected status 401, got %d: %s", recorder.Code, recorder.Body.String())
 	}
+	if !strings.Contains(recorder.Body.String(), "invalid username or password") {
+		t.Fatalf("expected generic invalid-login message, got %q", recorder.Body.String())
+	}
 	if strings.Contains(recorder.Header().Get("Set-Cookie"), serverpkg.SessionCookieName+"=") {
 		t.Fatalf("did not expect session cookie on failed login")
 	}
 }
 
-func TestGatewayLoginUnauthorizedGroupsReturnsForbidden(t *testing.T) {
+func TestGatewayLoginUnauthorizedGroupsReturnsUnauthorized(t *testing.T) {
 	t.Parallel()
 
 	elasticSearch := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
@@ -588,8 +591,17 @@ func TestGatewayLoginUnauthorizedGroupsReturnsForbidden(t *testing.T) {
 
 	gateway.ServeHTTP(recorder, request)
 
-	if recorder.Code != http.StatusForbidden {
-		t.Fatalf("expected status 403, got %d: %s", recorder.Code, recorder.Body.String())
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status 401, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "invalid username or password") {
+		t.Fatalf("expected generic invalid-login message, got %q", recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), "does not grant access") {
+		t.Fatalf("login page leaked LDAP authorization status: %q", recorder.Body.String())
+	}
+	if strings.Contains(recorder.Header().Get("Set-Cookie"), serverpkg.SessionCookieName+"=") {
+		t.Fatalf("did not expect session cookie on failed login")
 	}
 }
 
