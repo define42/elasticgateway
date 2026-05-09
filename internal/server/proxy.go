@@ -24,7 +24,7 @@ func (g *Gateway) proxyKibana(w http.ResponseWriter, r *http.Request, sessionDat
 			pr.Out.Header.Del("Authorization")
 			pr.Out.Header.Set("Authorization", sessionData.AuthHeader)
 			pr.Out.Header.Set("X-Forwarded-Host", pr.In.Host)
-			pr.Out.Header.Set("X-Forwarded-Proto", ForwardedProto(pr.In))
+			pr.Out.Header.Set("X-Forwarded-Proto", forwardedProto(pr.In, g.Client.Config.ForceSecureCookies))
 			pr.Out.Header.Set("X-Forwarded-Prefix", kibanaBasePath)
 		},
 		ErrorHandler: func(proxyWriter http.ResponseWriter, _ *http.Request, proxyErr error) {

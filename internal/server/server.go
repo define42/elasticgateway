@@ -670,14 +670,14 @@ func (g *Gateway) setSessionCookie(w http.ResponseWriter, r *http.Request, s Ses
 		http.Error(w, "failed to encode session cookie", http.StatusInternalServerError)
 		return
 	}
-	// #nosec G124 -- Secure is intentionally enabled only for HTTPS so local HTTP development remains usable.
+	// #nosec G124 -- Secure is enabled for HTTPS and for explicit upstream TLS termination deployments.
 	http.SetCookie(w, &http.Cookie{
 		Name:     SessionCookieName,
 		Value:    encoded,
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   r.TLS != nil,
+		Secure:   g.sessionCookieSecure(r),
 		MaxAge:   sessionCookieMaxAgeSeconds,
 	})
 }
@@ -695,10 +695,14 @@ func (g *Gateway) clearSessionCookie(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   r.TLS != nil,
+		Secure:   g.sessionCookieSecure(r),
 		MaxAge:   -1,
 		Expires:  time.Unix(0, 0),
 	})
+}
+
+func (g *Gateway) sessionCookieSecure(r *http.Request) bool {
+	return r.TLS != nil || g.Client.Config.ForceSecureCookies
 }
 
 // BuildBasicAuthorization returns a Basic Auth header value for the credentials.
@@ -721,8 +725,15 @@ func generateInternalUserPassword() (string, error) {
 	return base64.RawURLEncoding.EncodeToString(b), nil
 }
 
-// ForwardedProto reports the original request scheme for proxy headers.
+// ForwardedProto reports the direct request scheme for proxy headers.
 func ForwardedProto(r *http.Request) string {
+	return forwardedProto(r, false)
+}
+
+func forwardedProto(r *http.Request, forceSecure bool) string {
+	if forceSecure {
+		return "https"
+	}
 	if r.TLS != nil {
 		return "https"
 	}

@@ -46,6 +46,15 @@ func TestLoadGatewayReadsSessionSecret(t *testing.T) {
 	}
 }
 
+func TestLoadGatewayReadsForceSecureCookies(t *testing.T) {
+	t.Setenv("FORCE_SECURE_COOKIES", "true")
+
+	cfg := appconfig.LoadGateway()
+	if !cfg.ForceSecureCookies {
+		t.Fatal("expected FORCE_SECURE_COOKIES=true to enable forced secure cookies")
+	}
+}
+
 func TestRunReturnsBootstrapFailures(t *testing.T) {
 	t.Run("policy failure", func(t *testing.T) {
 		elasticSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
