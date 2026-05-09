@@ -82,7 +82,7 @@ At startup, the gateway bootstraps shared Elasticsearch resources:
 - index template `gateway-rollover-template`
 - template index pattern `*-*-rollover-*`
 - `event_time` mapping as an Elasticsearch `date`
-- default template settings of `1` shard and `1` replica per rollover backing index
+- configurable template settings for primary shards and replicas per rollover backing index
 
 New backing indices are created with:
 
@@ -131,6 +131,8 @@ Configuration is environment based.
 | `SESSION_TTL` | `24h` | Gateway session lifetime, parsed as a Go duration such as `8h` or `30m`, or as seconds |
 | `FORCE_SECURE_COOKIES` | `false` | Always set the session cookie `Secure` flag and send `X-Forwarded-Proto: https` to Kibana, for TLS-terminating load balancers |
 | `TRUSTED_PROXIES` | empty | Comma- or space-separated proxy IPs/CIDRs allowed to supply `X-Forwarded-For`; unset ignores inbound `X-Forwarded-For` |
+| `INDEX_SHARDS` | `1` | Primary shard count for gateway-managed rollover backing indices. Must be at least `1` |
+| `INDEX_REPLICAS` | `1` | Replica count for gateway-managed rollover backing indices. May be `0` for single-node clusters |
 | `LDAP_URL` | `ldaps://ldap:389` | LDAP server URL |
 | `LDAP_BASE_DN` | `dc=glauth,dc=com` | LDAP search base |
 | `LDAP_USER_FILTER` | `(mail=%s)` | User lookup filter; `%s` receives the login email |
@@ -266,6 +268,5 @@ Repository layout:
 
 ## Limitations
 
-- Shard and replica counts are currently hard-coded in the gateway config.
 - Kibana resource setup is synchronous; failed space or data-view creation fails the ingest before writing the document.
 - The service is built for namespace-prefixed index families, not arbitrary Elasticsearch indexing.

@@ -138,6 +138,55 @@ func TestLoadGatewayReadsForceSecureCookies(t *testing.T) {
 	}
 }
 
+func TestLoadGatewayReadsIndexShardSettings(t *testing.T) {
+	t.Setenv("INDEX_SHARDS", "3")
+	t.Setenv("INDEX_REPLICAS", "0")
+
+	cfg, err := loadGatewayForTest(t)
+	if err != nil {
+		t.Fatalf("LoadGateway: %v", err)
+	}
+	if cfg.Shards != 3 || cfg.Replicas != 0 {
+		t.Fatalf("unexpected index shard settings: shards=%d replicas=%d", cfg.Shards, cfg.Replicas)
+	}
+}
+
+func TestLoadGatewayDefaultsIndexShardSettings(t *testing.T) {
+	cfg, err := loadGatewayForTest(t)
+	if err != nil {
+		t.Fatalf("LoadGateway: %v", err)
+	}
+	if cfg.Shards != DefaultShards || cfg.Replicas != DefaultReplicas {
+		t.Fatalf("unexpected default index shard settings: shards=%d replicas=%d", cfg.Shards, cfg.Replicas)
+	}
+}
+
+func TestLoadGatewayRejectsInvalidIndexShardSettings(t *testing.T) {
+	tests := []struct {
+		name string
+		key  string
+		val  string
+	}{
+		{name: "non integer shards", key: "INDEX_SHARDS", val: "many"},
+		{name: "zero shards", key: "INDEX_SHARDS", val: "0"},
+		{name: "negative replicas", key: "INDEX_REPLICAS", val: "-1"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(tt.key, tt.val)
+
+			_, err := loadGatewayForTest(t)
+			if err == nil {
+				t.Fatalf("expected invalid %s error", tt.key)
+			}
+			if !strings.Contains(err.Error(), tt.key) || !strings.Contains(err.Error(), tt.val) {
+				t.Fatalf("expected useful %s error, got %v", tt.key, err)
+			}
+		})
+	}
+}
+
 func TestLoadGatewayTrustedProxiesDefaultDisabled(t *testing.T) {
 	cfg, err := loadGatewayForTest(t)
 	if err != nil {

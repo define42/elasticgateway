@@ -30,6 +30,10 @@ const (
 	DefaultHTTPClientTimeout = 300 * time.Second
 	// MinSessionSecretLength is the minimum accepted SESSION_SECRET length.
 	MinSessionSecretLength = 32
+	// DefaultShards is the default primary shard count for gateway-managed indices.
+	DefaultShards = 1
+	// DefaultReplicas is the default replica count for gateway-managed indices.
+	DefaultReplicas = 1
 )
 
 // Config contains runtime settings for Elasticsearch, Kibana, and HTTP serving.
@@ -122,6 +126,14 @@ func LoadGateway() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	shards, err := getEnvIntAtLeast("INDEX_SHARDS", DefaultShards, 1)
+	if err != nil {
+		return Config{}, err
+	}
+	replicas, err := getEnvIntAtLeast("INDEX_REPLICAS", DefaultReplicas, 0)
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
 		ElasticsearchURL:      getEnv("ELASTICSEARCH_URL", DefaultElasticsearchURL),
@@ -135,8 +147,8 @@ func LoadGateway() (Config, error) {
 		ForceSecureCookies:    getEnvBool("FORCE_SECURE_COOKIES", false),
 		TrustedProxies:        trustedProxies,
 		ListenAddr:            getEnv("LISTEN_ADDR", DefaultListenAddr),
-		Shards:                1,
-		Replicas:              1,
+		Shards:                shards,
+		Replicas:              replicas,
 		HTTPClient:            httpClient,
 	}, nil
 }
@@ -257,6 +269,23 @@ func getEnvDuration(key string, def time.Duration) time.Duration {
 		}
 	}
 	return def
+}
+
+func getEnvIntAtLeast(key string, def, minimum int) (int, error) {
+	value, ok := os.LookupEnv(key)
+	if !ok {
+		return def, nil
+	}
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return def, nil
+	}
+
+	parsed, err := strconv.Atoi(value)
+	if err != nil || parsed < minimum {
+		return 0, fmt.Errorf("%s must be an integer >= %d, got %q", key, minimum, value)
+	}
+	return parsed, nil
 }
 
 func parseTrustedProxies(value string) ([]netip.Prefix, error) {

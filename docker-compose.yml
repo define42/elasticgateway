@@ -106,6 +106,8 @@ services:
       KIBANA_USERNAME: elastic
       KIBANA_PASSWORD: ${ELASTIC_PASSWORD:-Cedar7!FluxOrbit29}
       SESSION_SECRET: ${SESSION_SECRET:-local-dev-session-secret-change-me-32}
+      INDEX_SHARDS: ${INDEX_SHARDS:-1}
+      INDEX_REPLICAS: ${INDEX_REPLICAS:-1}
       LISTEN_ADDR: :8080
     ports:
       - "8080:8080"
