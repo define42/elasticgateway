@@ -12,6 +12,7 @@ import (
 	"io"
 	"log/slog"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -609,12 +610,27 @@ func accessNamespaces(access []authz.Access) []string {
 func requestLogAttrs(r *http.Request) []any {
 	attrs := []any{
 		slog.String("method", r.Method),
+		slog.String("client_ip", clientIP(r)),
 		slog.String("remote_addr", r.RemoteAddr),
 	}
 	if r.URL != nil {
 		attrs = append(attrs, slog.String("path", r.URL.Path))
 	}
 	return attrs
+}
+
+func clientIP(r *http.Request) string {
+	for forwarded := range strings.SplitSeq(r.Header.Get("X-Forwarded-For"), ",") {
+		if ip := strings.TrimSpace(forwarded); ip != "" {
+			return ip
+		}
+	}
+
+	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
+	if err == nil {
+		return host
+	}
+	return strings.TrimSpace(r.RemoteAddr)
 }
 
 func (g *Gateway) authorizeIngestRequest(r *http.Request, indexName string) (string, error) {

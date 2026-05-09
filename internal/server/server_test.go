@@ -46,6 +46,7 @@ func TestGatewayLogsLoginSuccessAsJSON(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=alice&password=dogood"))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("X-Forwarded-For", "203.0.113.7, 10.0.0.12")
 
 	gateway.Handler().ServeHTTP(recorder, request)
 
@@ -57,7 +58,7 @@ func TestGatewayLogsLoginSuccessAsJSON(t *testing.T) {
 	if entry["event"] != "user_login" || entry["msg"] != "user login" || entry["level"] != "INFO" {
 		t.Fatalf("unexpected login log entry: %#v", entry)
 	}
-	if entry["username"] != "alice" || entry["http_status"] != float64(http.StatusSeeOther) {
+	if entry["username"] != "alice" || entry["client_ip"] != "203.0.113.7" || entry["http_status"] != float64(http.StatusSeeOther) {
 		t.Fatalf("unexpected login log fields: %#v", entry)
 	}
 	namespaces, ok := entry["namespaces"].([]any)
