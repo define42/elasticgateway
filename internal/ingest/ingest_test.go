@@ -34,6 +34,18 @@ func TestDecodeBulkNDJSONPreservesMalformedActionLineErrorAfterDrain(t *testing.
 	}
 }
 
+func TestDecodeJSONObjectRejectsEmptyAndTrailingInput(t *testing.T) {
+	t.Parallel()
+
+	if _, err := DecodeJSONObject(strings.NewReader("")); err == nil || err.Error() != "request body must be a JSON object" {
+		t.Fatalf("expected empty-body decode error, got %v", err)
+	}
+
+	if _, err := DecodeJSONObject(strings.NewReader(`{} {}`)); err == nil || !strings.Contains(err.Error(), "single JSON object") {
+		t.Fatalf("expected trailing-json decode error, got %v", err)
+	}
+}
+
 type malformedLineThenErrorReader struct {
 	read bool
 	err  error

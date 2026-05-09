@@ -1,6 +1,9 @@
 package authz
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestResolveIngestWriteNamespace(t *testing.T) {
 	t.Parallel()
@@ -14,6 +17,20 @@ func TestResolveIngestWriteNamespace(t *testing.T) {
 				t.Fatalf("ResolveIngestWriteNamespace() = %q, %v; want %q, %v", got, ok, tt.want, tt.wantOK)
 			}
 		})
+	}
+}
+
+func TestAccessGroupNames(t *testing.T) {
+	t.Parallel()
+
+	names := AccessGroupNames([]Access{
+		{Group: "team1_rw"},
+		{Group: ""},
+		{Group: "team1_rw"},
+		{Group: "team2_r"},
+	})
+	if !reflect.DeepEqual(names, []string{"team1_rw", "team2_r"}) {
+		t.Fatalf("unexpected deduped group names: %#v", names)
 	}
 }
 
