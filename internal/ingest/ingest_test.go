@@ -211,12 +211,7 @@ func TestDecodeJSONObjectRejectsEmptyAndTrailingInput(t *testing.T) {
 func TestParsePathValidation(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name    string
-		path    string
-		want    string
-		wantErr string
-	}{
+	tests := []parsePathValidationCase{
 		{name: "valid", path: "/ingest/orders-demo/", want: "orders-demo"},
 		{name: "wrong route", path: "/other/orders-demo", wantErr: ErrRouteNotFound.Error()},
 		{name: "empty index", path: "/ingest/", wantErr: "path must be /ingest/<index>/"},
@@ -230,18 +225,7 @@ func TestParsePathValidation(t *testing.T) {
 			t.Parallel()
 
 			got, err := ParsePath(tt.path)
-			if tt.wantErr == "" {
-				if err != nil {
-					t.Fatalf("ParsePath returned error: %v", err)
-				}
-				if got != tt.want {
-					t.Fatalf("ParsePath returned %q, want %q", got, tt.want)
-				}
-				return
-			}
-			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
-			}
+			assertParsePathValidation(t, "ParsePath", got, err, tt)
 		})
 	}
 }
@@ -249,12 +233,7 @@ func TestParsePathValidation(t *testing.T) {
 func TestParseBulkPathValidation(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name    string
-		path    string
-		want    string
-		wantErr string
-	}{
+	tests := []parsePathValidationCase{
 		{name: "valid", path: "/ingest/orders-demo/_bulk/", want: "orders-demo"},
 		{name: "wrong route", path: "/other/orders-demo/_bulk", wantErr: ErrRouteNotFound.Error()},
 		{name: "missing bulk suffix", path: "/ingest/orders-demo", wantErr: ErrRouteNotFound.Error()},
@@ -269,19 +248,32 @@ func TestParseBulkPathValidation(t *testing.T) {
 			t.Parallel()
 
 			got, err := ParseBulkPath(tt.path)
-			if tt.wantErr == "" {
-				if err != nil {
-					t.Fatalf("ParseBulkPath returned error: %v", err)
-				}
-				if got != tt.want {
-					t.Fatalf("ParseBulkPath returned %q, want %q", got, tt.want)
-				}
-				return
-			}
-			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
-			}
+			assertParsePathValidation(t, "ParseBulkPath", got, err, tt)
 		})
+	}
+}
+
+type parsePathValidationCase struct {
+	name    string
+	path    string
+	want    string
+	wantErr string
+}
+
+func assertParsePathValidation(t *testing.T, functionName, got string, err error, tt parsePathValidationCase) {
+	t.Helper()
+
+	if tt.wantErr == "" {
+		if err != nil {
+			t.Fatalf("%s returned error: %v", functionName, err)
+		}
+		if got != tt.want {
+			t.Fatalf("%s returned %q, want %q", functionName, got, tt.want)
+		}
+		return
+	}
+	if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+		t.Fatalf("expected error containing %q, got %v", tt.wantErr, err)
 	}
 }
 
