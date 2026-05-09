@@ -1,0 +1,77 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/url"
+	"os"
+	"os/signal"
+	"syscall"
+	"time"
+
+	appconfig "github.com/define42/opensearchgateway/internal/config"
+	"github.com/define42/opensearchgateway/internal/elastic"
+	ldappkg "github.com/define42/opensearchgateway/internal/ldap"
+	"github.com/define42/opensearchgateway/internal/server"
+)
+
+func main() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	cfg := appconfig.LoadGateway()
+	if err := run(ctx, cfg, func(handler http.Handler) error {
+		srv := &http.Server{
+			Addr:              cfg.ListenAddr,
+			Handler:           handler,
+			ReadHeaderTimeout: 5 * time.Second,
+		}
+
+		go func() {
+			<-ctx.Done()
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = srv.Shutdown(shutdownCtx)
+		}()
+
+		err := srv.ListenAndServe()
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	}); err != nil {
+		fatal(err)
+	}
+}
+
+func run(ctx context.Context, cfg appconfig.Config, serve func(http.Handler) error) error {
+	client := elastic.NewClient(cfg)
+
+	if err := client.EnsureILMPolicy(ctx, elastic.DefaultILMPolicyID, 100000000); err != nil {
+		return err
+	}
+
+	if err := client.EnsureIndexTemplate(ctx, elastic.DefaultIndexTemplateName); err != nil {
+		return err
+	}
+
+	authenticator := ldappkg.New(appconfig.LoadLDAP())
+	return serve(server.New(client, authenticator.AuthenticateAccess).Handler())
+}
+
+func fatal(err error) {
+	if err == nil {
+		return
+	}
+
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		fmt.Fprintf(os.Stderr, "network error: %v\n", urlErr)
+		os.Exit(1)
+	}
+
+	fmt.Fprintf(os.Stderr, "error: %v\n", err)
+	os.Exit(1)
+}

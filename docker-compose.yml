@@ -1,0 +1,133 @@
+name: elasticgateway
+
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${ELASTIC_VERSION:-9.3.4}
+    environment:
+      - discovery.type=single-node
+      - bootstrap.memory_lock=true
+      - xpack.security.enabled=true
+      - xpack.security.http.ssl.enabled=false
+      - xpack.license.self_generated.type=basic
+      - ELASTIC_PASSWORD=${ELASTIC_PASSWORD:-Cedar7!FluxOrbit29}
+      - ES_JAVA_OPTS=-Xms512m -Xmx512m
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl -sf -u "elastic:${ELASTIC_PASSWORD:-Cedar7!FluxOrbit29}" http://localhost:9200/_cluster/health?wait_for_status=yellow\&timeout=5s >/dev/null || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 45s
+    networks:
+      - elastic-net
+    restart: unless-stopped
+
+  elastic-setup:
+    image: docker.elastic.co/elasticsearch/elasticsearch:${ELASTIC_VERSION:-9.3.4}
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    environment:
+      ELASTIC_PASSWORD: ${ELASTIC_PASSWORD:-Cedar7!FluxOrbit29}
+      KIBANA_SYSTEM_PASSWORD: ${KIBANA_SYSTEM_PASSWORD:-Kibana7!FluxOrbit29}
+    command:
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        until curl -sf -u "elastic:${ELASTIC_PASSWORD:-Cedar7!FluxOrbit29}" http://elasticsearch:9200 >/dev/null; do
+          sleep 2
+        done
+        curl -sf -u "elastic:${ELASTIC_PASSWORD:-Cedar7!FluxOrbit29}" \
+          -H "Content-Type: application/json" \
+          -X POST http://elasticsearch:9200/_security/user/kibana_system/_password \
+          -d "{\"password\":\"${KIBANA_SYSTEM_PASSWORD:-Kibana7!FluxOrbit29}\"}" >/dev/null
+    networks:
+      - elastic-net
+    restart: "no"
+
+  kibana:
+    image: docker.elastic.co/kibana/kibana:${ELASTIC_VERSION:-9.3.4}
+    depends_on:
+      elastic-setup:
+        condition: service_completed_successfully
+    environment:
+      SERVER_NAME: kibana
+      SERVER_BASEPATH: /kibana
+      SERVER_REWRITEBASEPATH: "false"
+      ELASTICSEARCH_HOSTS: http://elasticsearch:9200
+      ELASTICSEARCH_USERNAME: kibana_system
+      ELASTICSEARCH_PASSWORD: ${KIBANA_SYSTEM_PASSWORD:-Kibana7!FluxOrbit29}
+      XPACK_SECURITY_ENCRYPTIONKEY: ${KIBANA_SECURITY_ENCRYPTION_KEY:-0123456789abcdef0123456789abcdef}
+      XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY: ${KIBANA_SAVED_OBJECTS_ENCRYPTION_KEY:-abcdef0123456789abcdef0123456789}
+      XPACK_REPORTING_ENCRYPTIONKEY: ${KIBANA_REPORTING_ENCRYPTION_KEY:-fedcba9876543210fedcba9876543210}
+    ports:
+      - "5601:5601"
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - curl -sf http://localhost:5601/login >/dev/null || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 18
+      start_period: 45s
+    networks:
+      - elastic-net
+    restart: unless-stopped
+
+  elasticgateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      kibana:
+        condition: service_healthy
+      ldap:
+        condition: service_started
+    environment:
+      ELASTICSEARCH_URL: http://elasticsearch:9200
+      ELASTICSEARCH_USERNAME: elastic
+      ELASTICSEARCH_PASSWORD: ${ELASTIC_PASSWORD:-Cedar7!FluxOrbit29}
+      ELASTICSEARCH_SKIP_TLS_VERIFY: "false"
+      KIBANA_URL: http://kibana:5601
+      KIBANA_USERNAME: elastic
+      KIBANA_PASSWORD: ${ELASTIC_PASSWORD:-Cedar7!FluxOrbit29}
+      KIBANA_BASE_PATH: /kibana
+      LISTEN_ADDR: :8080
+    ports:
+      - "8080:8080"
+    networks:
+      - elastic-net
+    restart: unless-stopped
+
+  ldap:
+    image: glauth/glauth
+    restart: always
+    ports:
+      - "${LDAP_PORT:-1389}:389"
+    volumes:
+      - ./testldap/default-config.cfg:/app/config/config.cfg
+      - ./testldap/key.pem:/app/config/key.pem
+      - ./testldap/cert.pem:/app/config/cert.pem
+    networks:
+      - elastic-net
+
+volumes:
+  elasticsearch-data:
+
+networks:
+  elastic-net:

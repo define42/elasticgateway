@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Elastic Gateway Demo</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6efe4;
+      --panel: rgba(255, 251, 245, 0.94);
+      --ink: #1d1a17;
+      --muted: #6d625a;
+      --accent: #b4492d;
+      --accent-strong: #8f3119;
+      --border: rgba(76, 51, 38, 0.14);
+      --shadow: 0 24px 80px rgba(90, 57, 33, 0.16);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Avenir Next", "Trebuchet MS", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(180, 73, 45, 0.2), transparent 28%),
+        radial-gradient(circle at bottom right, rgba(230, 170, 108, 0.24), transparent 32%),
+        linear-gradient(160deg, #f2e4d1 0%, #fbf8f3 52%, #efe1cc 100%);
+      display: grid;
+      place-items: center;
+      padding: 32px 18px;
+    }
+
+    main {
+      width: min(860px, 100%);
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 28px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      backdrop-filter: blur(12px);
+    }
+
+    .hero {
+      padding: 32px 32px 18px;
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(135deg, rgba(255, 255, 255, 0.56), rgba(255, 244, 230, 0.82));
+    }
+
+    h1 {
+      margin: 0 0 10px;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(2rem, 4vw, 3.1rem);
+      line-height: 1.05;
+      letter-spacing: -0.03em;
+    }
+
+    .hero p {
+      margin: 0;
+      max-width: 62ch;
+      color: var(--muted);
+      font-size: 1rem;
+      line-height: 1.6;
+    }
+
+    form {
+      padding: 28px 32px 32px;
+      display: grid;
+      gap: 20px;
+    }
+
+    label {
+      display: grid;
+      gap: 8px;
+      font-weight: 700;
+      font-size: 0.96rem;
+    }
+
+    input,
+    textarea,
+    button {
+      font: inherit;
+    }
+
+    input,
+    textarea {
+      width: 100%;
+      border: 1px solid rgba(76, 51, 38, 0.18);
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.86);
+      color: var(--ink);
+      padding: 14px 16px;
+      transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+    }
+
+    input:focus,
+    textarea:focus {
+      outline: none;
+      border-color: rgba(180, 73, 45, 0.6);
+      box-shadow: 0 0 0 4px rgba(180, 73, 45, 0.12);
+      transform: translateY(-1px);
+    }
+
+    textarea {
+      min-height: 280px;
+      resize: vertical;
+      font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+      font-size: 0.94rem;
+      line-height: 1.55;
+    }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 12px;
+      align-items: center;
+    }
+
+    button {
+      border: 0;
+      border-radius: 999px;
+      padding: 13px 20px;
+      background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+      color: #fff8f2;
+      font-weight: 800;
+      cursor: pointer;
+      box-shadow: 0 16px 36px rgba(143, 49, 25, 0.22);
+    }
+
+    button:hover {
+      transform: translateY(-1px);
+    }
+
+    .hint {
+      color: var(--muted);
+      font-size: 0.93rem;
+    }
+
+    pre {
+      margin: 0;
+      padding: 18px;
+      border-top: 1px solid var(--border);
+      background: #201814;
+      color: #f9eee1;
+      font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+      font-size: 0.92rem;
+      line-height: 1.55;
+      min-height: 160px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+
+    @media (max-width: 700px) {
+      .hero,
+      form {
+        padding-left: 20px;
+        padding-right: 20px;
+      }
+
+      main {
+        border-radius: 22px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero">
+      <h1>Gateway Demo Console</h1>
+      <p>Send a single JSON document into the gateway. The document must include a top-level <code>event_time</code> field in UTC RFC3339 form, and the gateway will route it to <code>&lt;index&gt;-YYYYMMDD-rollover</code>.</p>
+    </section>
+
+    <form id="demo-form">
+      <label for="index-name">Index Name</label>
+      <input id="index-name" name="index" type="text" value="orders-demo" spellcheck="false" autocomplete="off">
+
+      <label for="username">LDAP Username <span class="hint">(optional when already signed in)</span></label>
+      <input id="username" name="username" type="text" spellcheck="false" autocomplete="username">
+
+      <label for="password">LDAP Password <span class="hint">(optional when already signed in)</span></label>
+      <input id="password" name="password" type="password" autocomplete="current-password">
+
+      <label for="payload">JSON Payload</label>
+      <textarea id="payload" name="payload" spellcheck="false">{
+  "event_time": "2024-12-30T10:11:12Z",
+  "message": "Demo event from the gateway UI",
+  "customer_id": 42,
+  "status": "received"
+}</textarea>
+
+      <div class="toolbar">
+        <button type="submit">Submit Document</button>
+        <span class="hint" id="status-text">Ready to send.</span>
+      </div>
+    </form>
+
+    <pre id="result">No request sent yet.</pre>
+  </main>
+
+  <script>
+    const form = document.getElementById("demo-form");
+    const indexInput = document.getElementById("index-name");
+    const usernameInput = document.getElementById("username");
+    const passwordInput = document.getElementById("password");
+    const payloadInput = document.getElementById("payload");
+    const result = document.getElementById("result");
+    const statusText = document.getElementById("status-text");
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      const indexName = indexInput.value.trim();
+      if (!indexName) {
+        statusText.textContent = "Index name is required.";
+        result.textContent = "Please enter an index name before submitting.";
+        indexInput.focus();
+        return;
+      }
+
+      const username = usernameInput.value.trim();
+      const password = passwordInput.value;
+      if ((username && !password) || (!username && password)) {
+        statusText.textContent = "Credentials are incomplete.";
+        result.textContent = "Enter both LDAP username and password, or leave both blank to use your current sign-in session.";
+        if (!username) {
+          usernameInput.focus();
+        } else {
+          passwordInput.focus();
+        }
+        return;
+      }
+
+      statusText.textContent = "Sending request...";
+      result.textContent = "Submitting to /ingest/" + indexName;
+
+      const headers = {
+        "Content-Type": "application/json"
+      };
+      if (username && password) {
+        headers["Authorization"] = "Basic " + btoa(username + ":" + password);
+      }
+
+      try {
+        const response = await fetch("/ingest/" + encodeURIComponent(indexName), {
+          method: "POST",
+          credentials: "same-origin",
+          headers,
+          body: payloadInput.value
+        });
+
+        const text = await response.text();
+        statusText.textContent = response.ok ? "Request accepted." : "Request failed.";
+        result.textContent = response.status + " " + response.statusText + "\n\n" + text;
+      } catch (error) {
+        statusText.textContent = "Network error.";
+        result.textContent = String(error);
+      }
+    });
+  </script>
+</body>
+</html>

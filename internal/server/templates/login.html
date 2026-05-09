@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Elastic Gateway Login</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #eef2e7;
+      --panel: rgba(255, 255, 252, 0.94);
+      --ink: #1d261c;
+      --muted: #617062;
+      --accent: #295f4e;
+      --accent-strong: #173e32;
+      --danger: #a23d3d;
+      --border: rgba(47, 71, 56, 0.12);
+      --shadow: 0 24px 80px rgba(39, 69, 54, 0.16);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "Avenir Next", "Trebuchet MS", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at top left, rgba(41, 95, 78, 0.17), transparent 28%),
+        radial-gradient(circle at bottom right, rgba(187, 209, 176, 0.3), transparent 32%),
+        linear-gradient(160deg, #edf5e8 0%, #fafcf8 52%, #e4ece0 100%);
+      display: grid;
+      place-items: center;
+      padding: 32px 18px;
+    }
+
+    main {
+      width: min(520px, 100%);
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 28px;
+      box-shadow: var(--shadow);
+      overflow: hidden;
+      backdrop-filter: blur(12px);
+    }
+
+    .hero {
+      padding: 32px 32px 18px;
+      border-bottom: 1px solid var(--border);
+      background: linear-gradient(135deg, rgba(255, 255, 255, 0.7), rgba(237, 245, 232, 0.92));
+    }
+
+    h1 {
+      margin: 0 0 10px;
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: clamp(2rem, 4vw, 3rem);
+      line-height: 1.05;
+      letter-spacing: -0.03em;
+    }
+
+    .hero p {
+      margin: 0;
+      color: var(--muted);
+      line-height: 1.6;
+    }
+
+    form {
+      padding: 28px 32px 32px;
+      display: grid;
+      gap: 18px;
+    }
+
+    label {
+      display: grid;
+      gap: 8px;
+      font-weight: 700;
+      font-size: 0.96rem;
+    }
+
+    input,
+    button {
+      font: inherit;
+    }
+
+    input {
+      width: 100%;
+      border: 1px solid rgba(47, 71, 56, 0.18);
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.92);
+      color: var(--ink);
+      padding: 14px 16px;
+      transition: border-color 120ms ease, box-shadow 120ms ease, transform 120ms ease;
+    }
+
+    input:focus {
+      outline: none;
+      border-color: rgba(41, 95, 78, 0.6);
+      box-shadow: 0 0 0 4px rgba(41, 95, 78, 0.12);
+      transform: translateY(-1px);
+    }
+
+    button {
+      border: 0;
+      border-radius: 999px;
+      padding: 13px 20px;
+      background: linear-gradient(135deg, var(--accent), var(--accent-strong));
+      color: #f3fbf7;
+      font-weight: 800;
+      cursor: pointer;
+      box-shadow: 0 16px 36px rgba(23, 62, 50, 0.22);
+    }
+
+    .hint {
+      color: var(--muted);
+      font-size: 0.93rem;
+      line-height: 1.55;
+    }
+
+    .error {
+      margin: 0;
+      padding: 14px 16px;
+      border-radius: 16px;
+      background: rgba(162, 61, 61, 0.1);
+      color: var(--danger);
+      font-weight: 700;
+    }
+
+    .links {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    a {
+      color: var(--accent);
+      text-decoration: none;
+      font-weight: 700;
+    }
+
+    @media (max-width: 700px) {
+      .hero,
+      form {
+        padding-left: 20px;
+        padding-right: 20px;
+      }
+
+      main {
+        border-radius: 22px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <section class="hero">
+      <h1>Gateway Login</h1>
+      <p>Sign in with your LDAP username and password. The gateway validates the credentials, provisions your Elasticsearch account, and then opens Kibana through the gateway proxy.</p>
+    </section>
+
+    <form method="post" action="/login">
+      {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+
+      <label for="username">Username</label>
+      <input id="username" name="username" type="text" value="{{.Username}}" autocomplete="username" spellcheck="false" required>
+
+      <label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+
+      <button type="submit">Sign In</button>
+
+      <div class="links">
+        <span class="hint">Kibana is proxied through this gateway after sign-in.</span>
+        <a href="/demo">Open demo page</a>
+      </div>
+    </form>
+  </main>
+</body>
+</html>
