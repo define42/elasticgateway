@@ -14,11 +14,11 @@ import (
 	"testing"
 	"time"
 
-	authzpkg "github.com/define42/opensearchgateway/internal/authz"
-	appconfig "github.com/define42/opensearchgateway/internal/config"
-	elasticpkg "github.com/define42/opensearchgateway/internal/elastic"
-	ldappkg "github.com/define42/opensearchgateway/internal/ldap"
-	serverpkg "github.com/define42/opensearchgateway/internal/server"
+	authzpkg "github.com/define42/elasticgateway/internal/authz"
+	appconfig "github.com/define42/elasticgateway/internal/config"
+	elasticpkg "github.com/define42/elasticgateway/internal/elastic"
+	ldappkg "github.com/define42/elasticgateway/internal/ldap"
+	serverpkg "github.com/define42/elasticgateway/internal/server"
 )
 
 //nolint:gocognit,funlen // Bootstrap test keeps policy/template request assertions together.

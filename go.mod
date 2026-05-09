@@ -1,4 +1,4 @@
-module github.com/define42/opensearchgateway
+module github.com/define42/elasticgateway
 
 go 1.26.1
 

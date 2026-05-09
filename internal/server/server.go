@@ -14,10 +14,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/define42/opensearchgateway/internal/authz"
-	"github.com/define42/opensearchgateway/internal/elastic"
-	"github.com/define42/opensearchgateway/internal/ingest"
-	ldappkg "github.com/define42/opensearchgateway/internal/ldap"
+	"github.com/define42/elasticgateway/internal/authz"
+	"github.com/define42/elasticgateway/internal/elastic"
+	"github.com/define42/elasticgateway/internal/ingest"
+	ldappkg "github.com/define42/elasticgateway/internal/ldap"
 	"github.com/gorilla/securecookie"
 )
 

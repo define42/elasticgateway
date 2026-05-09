@@ -16,10 +16,10 @@ import (
 	"testing"
 	"time"
 
-	appconfig "github.com/define42/opensearchgateway/internal/config"
-	elasticpkg "github.com/define42/opensearchgateway/internal/elastic"
-	ldappkg "github.com/define42/opensearchgateway/internal/ldap"
-	serverpkg "github.com/define42/opensearchgateway/internal/server"
+	appconfig "github.com/define42/elasticgateway/internal/config"
+	elasticpkg "github.com/define42/elasticgateway/internal/elastic"
+	ldappkg "github.com/define42/elasticgateway/internal/ldap"
+	serverpkg "github.com/define42/elasticgateway/internal/server"
 )
 
 const testDefaultPassword = "Cedar7!FluxOrbit29"

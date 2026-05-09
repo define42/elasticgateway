@@ -8,7 +8,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/define42/opensearchgateway/internal/authz"
+	"github.com/define42/elasticgateway/internal/authz"
 )
 
 // ProvisionLoginUser ensures roles, spaces, data views, and the native user.

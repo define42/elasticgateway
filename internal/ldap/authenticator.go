@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/define42/opensearchgateway/internal/authz"
-	"github.com/define42/opensearchgateway/internal/config"
+	"github.com/define42/elasticgateway/internal/authz"
+	"github.com/define42/elasticgateway/internal/config"
 	goldap "github.com/go-ldap/ldap/v3"
 )
 

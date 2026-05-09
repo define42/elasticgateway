@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	authzpkg "github.com/define42/opensearchgateway/internal/authz"
-	elasticpkg "github.com/define42/opensearchgateway/internal/elastic"
-	ingestpkg "github.com/define42/opensearchgateway/internal/ingest"
-	ldappkg "github.com/define42/opensearchgateway/internal/ldap"
-	serverpkg "github.com/define42/opensearchgateway/internal/server"
+	authzpkg "github.com/define42/elasticgateway/internal/authz"
+	elasticpkg "github.com/define42/elasticgateway/internal/elastic"
+	ingestpkg "github.com/define42/elasticgateway/internal/ingest"
+	ldappkg "github.com/define42/elasticgateway/internal/ldap"
+	serverpkg "github.com/define42/elasticgateway/internal/server"
 )
 
 //nolint:cyclop // Cache behavior test keeps the hit, miss, and expiry assertions together.

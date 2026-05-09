@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/define42/opensearchgateway/internal/config"
+	"github.com/define42/elasticgateway/internal/config"
 )
 
 const (

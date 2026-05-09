@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/define42/opensearchgateway/internal/authz"
+	"github.com/define42/elasticgateway/internal/authz"
 )
 
 const (

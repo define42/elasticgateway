@@ -11,10 +11,10 @@ import (
 	"syscall"
 	"time"
 
-	appconfig "github.com/define42/opensearchgateway/internal/config"
-	"github.com/define42/opensearchgateway/internal/elastic"
-	ldappkg "github.com/define42/opensearchgateway/internal/ldap"
-	"github.com/define42/opensearchgateway/internal/server"
+	appconfig "github.com/define42/elasticgateway/internal/config"
+	"github.com/define42/elasticgateway/internal/elastic"
+	ldappkg "github.com/define42/elasticgateway/internal/ldap"
+	"github.com/define42/elasticgateway/internal/server"
 )
 
 func main() {

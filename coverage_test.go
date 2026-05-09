@@ -14,11 +14,11 @@ import (
 	"testing"
 	"time"
 
-	authzpkg "github.com/define42/opensearchgateway/internal/authz"
-	appconfig "github.com/define42/opensearchgateway/internal/config"
-	elasticpkg "github.com/define42/opensearchgateway/internal/elastic"
-	ingestpkg "github.com/define42/opensearchgateway/internal/ingest"
-	serverpkg "github.com/define42/opensearchgateway/internal/server"
+	authzpkg "github.com/define42/elasticgateway/internal/authz"
+	appconfig "github.com/define42/elasticgateway/internal/config"
+	elasticpkg "github.com/define42/elasticgateway/internal/elastic"
+	ingestpkg "github.com/define42/elasticgateway/internal/ingest"
+	serverpkg "github.com/define42/elasticgateway/internal/server"
 )
 
 func TestDefaultHTTPClient(t *testing.T) {

@@ -6,9 +6,9 @@ import (
 	"testing"
 	"time"
 
-	authzpkg "github.com/define42/opensearchgateway/internal/authz"
-	appconfig "github.com/define42/opensearchgateway/internal/config"
-	ldappkg "github.com/define42/opensearchgateway/internal/ldap"
+	authzpkg "github.com/define42/elasticgateway/internal/authz"
+	appconfig "github.com/define42/elasticgateway/internal/config"
+	ldappkg "github.com/define42/elasticgateway/internal/ldap"
 )
 
 //nolint:funlen // Table-driven LDAP permission cases are easier to audit in one table.
