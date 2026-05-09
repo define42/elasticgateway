@@ -107,7 +107,7 @@ func RoleRequestForAccess(access authz.Access) KibanaRoleRequest {
 
 func kibanaPrivilegesForMode(mode string) ([]string, map[string][]string) {
 	switch mode {
-	case "r":
+	case "user":
 		return []string{}, map[string][]string{
 			"dashboard_v2": {"all"},
 			"discover_v2":  {"all"},

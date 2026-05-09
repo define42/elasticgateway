@@ -48,6 +48,14 @@ func TestPermissionsFromGroup(t *testing.T) {
 			wantOK:        true,
 		},
 		{
+			name:          "r group is rejected",
+			group:         "team10_r",
+			wantNamespace: "",
+			wantPullOnly:  false,
+			wantDelete:    false,
+			wantOK:        false,
+		},
+		{
 			name:          "re group is rejected",
 			group:         "team10_re",
 			wantNamespace: "",
@@ -56,8 +64,8 @@ func TestPermissionsFromGroup(t *testing.T) {
 			wantOK:        false,
 		},
 		{
-			name:          "r group parses read-only access",
-			group:         "team10_r",
+			name:          "user group parses read-only access",
+			group:         "team10_user",
 			wantNamespace: "team10",
 			wantPullOnly:  true,
 			wantDelete:    false,
@@ -105,7 +113,7 @@ func TestGroupNameFromDN(t *testing.T) {
 		want string
 	}{
 		{name: "cn prefix", dn: "cn=team10_rw,ou=groups,dc=glauth,dc=com", want: "team10_rw"},
-		{name: "ou prefix", dn: "ou=team10_r,dc=glauth,dc=com", want: "team10_r"},
+		{name: "ou prefix", dn: "ou=team10_user,dc=glauth,dc=com", want: "team10_user"},
 		{name: "plain value", dn: "team10_rwd", want: "team10_rwd"},
 	}
 
@@ -123,7 +131,7 @@ func TestAccessFromGroupsFiltersPrefixAndSelectsMostPermissive(t *testing.T) {
 	t.Parallel()
 
 	groups := []string{
-		"cn=team10_r,ou=groups,dc=glauth,dc=com",
+		"cn=team10_user,ou=groups,dc=glauth,dc=com",
 		"ou=team10_rw,dc=glauth,dc=com",
 		"cn=other_rw,ou=groups,dc=glauth,dc=com",
 	}
@@ -144,7 +152,7 @@ func TestAccessFromGroupsRejectsReadEditSuffix(t *testing.T) {
 	t.Parallel()
 
 	access, user := ldappkg.AccessFromGroups("reader", []string{
-		"cn=team10_r,ou=groups,dc=glauth,dc=com",
+		"cn=team10_user,ou=groups,dc=glauth,dc=com",
 		"cn=team10_re,ou=groups,dc=glauth,dc=com",
 	}, "team")
 	if user == nil {
@@ -154,7 +162,7 @@ func TestAccessFromGroupsRejectsReadEditSuffix(t *testing.T) {
 		t.Fatalf("unexpected selected user permissions: %+v", user)
 	}
 	if len(access) != 1 {
-		t.Fatalf("expected only the _r access entry, got %+v", access)
+		t.Fatalf("expected only the _user access entry, got %+v", access)
 	}
 }
 

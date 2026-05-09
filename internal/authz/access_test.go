@@ -51,7 +51,7 @@ func resolveIngestWriteNamespaceCases() []resolveIngestWriteNamespaceCase {
 		},
 		{
 			name:      "read only access is not write access",
-			access:    []Access{{Group: "team10_r", Namespace: "team10", PullOnly: true}},
+			access:    []Access{{Group: "team10_user", Namespace: "team10", PullOnly: true}},
 			indexName: "team10-hello",
 		},
 		{
