@@ -6,11 +6,13 @@ import (
 	"crypto/x509"
 	"fmt"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
 
 const (
@@ -37,6 +39,7 @@ type Config struct {
 	SessionSecret         string
 	SessionTTL            time.Duration
 	ForceSecureCookies    bool
+	TrustedProxies        []netip.Prefix
 	ListenAddr            string
 	Shards                int
 	Replicas              int
@@ -93,6 +96,10 @@ func LoadGateway() (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	trustedProxies, err := parseTrustedProxies(getEnv("TRUSTED_PROXIES", ""))
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
 		ElasticsearchURL:      getEnv("ELASTICSEARCH_URL", DefaultElasticsearchURL),
@@ -104,6 +111,7 @@ func LoadGateway() (Config, error) {
 		SessionSecret:         getEnv("SESSION_SECRET", ""),
 		SessionTTL:            getEnvDuration("SESSION_TTL", DefaultSessionTTL),
 		ForceSecureCookies:    getEnvBool("FORCE_SECURE_COOKIES", false),
+		TrustedProxies:        trustedProxies,
 		ListenAddr:            getEnv("LISTEN_ADDR", DefaultListenAddr),
 		Shards:                1,
 		Replicas:              1,
@@ -209,4 +217,28 @@ func getEnvDuration(key string, def time.Duration) time.Duration {
 		}
 	}
 	return def
+}
+
+func parseTrustedProxies(value string) ([]netip.Prefix, error) {
+	fields := strings.FieldsFunc(value, func(r rune) bool {
+		return r == ',' || unicode.IsSpace(r)
+	})
+	prefixes := make([]netip.Prefix, 0, len(fields))
+	for _, field := range fields {
+		field = strings.TrimSpace(field)
+		if field == "" {
+			continue
+		}
+
+		if prefix, err := netip.ParsePrefix(field); err == nil {
+			prefixes = append(prefixes, prefix.Masked())
+			continue
+		}
+		if addr, err := netip.ParseAddr(field); err == nil {
+			prefixes = append(prefixes, netip.PrefixFrom(addr, addr.BitLen()))
+			continue
+		}
+		return nil, fmt.Errorf("invalid TRUSTED_PROXIES entry %q: expected CIDR or IP address", field)
+	}
+	return prefixes, nil
 }

@@ -17,7 +17,9 @@ func (g *Gateway) proxyKibana(w http.ResponseWriter, r *http.Request, sessionDat
 			pr.SetURL(g.kibanaTarget)
 			pr.Out.URL.Path = kibanaUpstreamPath(pr.Out.URL.Path)
 			pr.Out.URL.RawPath = ""
-			pr.Out.Header["X-Forwarded-For"] = pr.In.Header["X-Forwarded-For"]
+			if forwardedFor := g.trustedForwardedFor(pr.In); len(forwardedFor) > 0 {
+				pr.Out.Header.Set("X-Forwarded-For", strings.Join(forwardedFor, ", "))
+			}
 			pr.SetXForwarded()
 			pr.Out.Header.Del("Authorization")
 			pr.Out.Header.Set("Authorization", sessionData.AuthHeader)

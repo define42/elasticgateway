@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -79,6 +80,46 @@ func TestLoadGatewayReadsForceSecureCookies(t *testing.T) {
 	}
 	if !cfg.ForceSecureCookies {
 		t.Fatal("expected FORCE_SECURE_COOKIES=true to enable forced secure cookies")
+	}
+}
+
+func TestLoadGatewayTrustedProxiesDefaultDisabled(t *testing.T) {
+	cfg, err := LoadGateway()
+	if err != nil {
+		t.Fatalf("LoadGateway: %v", err)
+	}
+	if len(cfg.TrustedProxies) != 0 {
+		t.Fatalf("expected no trusted proxies by default, got %#v", cfg.TrustedProxies)
+	}
+}
+
+func TestLoadGatewayReadsTrustedProxies(t *testing.T) {
+	t.Setenv("TRUSTED_PROXIES", "10.0.0.0/8, 192.0.2.10 2001:db8::/32")
+
+	cfg, err := LoadGateway()
+	if err != nil {
+		t.Fatalf("LoadGateway: %v", err)
+	}
+
+	got := make([]string, 0, len(cfg.TrustedProxies))
+	for _, prefix := range cfg.TrustedProxies {
+		got = append(got, prefix.String())
+	}
+	want := []string{"10.0.0.0/8", "192.0.2.10/32", "2001:db8::/32"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected trusted proxies: got %#v want %#v", got, want)
+	}
+}
+
+func TestLoadGatewayInvalidTrustedProxiesReturnsError(t *testing.T) {
+	t.Setenv("TRUSTED_PROXIES", "10.0.0.0/8, nope")
+
+	_, err := LoadGateway()
+	if err == nil {
+		t.Fatal("expected invalid TRUSTED_PROXIES error")
+	}
+	if !strings.Contains(err.Error(), "TRUSTED_PROXIES") || !strings.Contains(err.Error(), "nope") {
+		t.Fatalf("expected useful TRUSTED_PROXIES error, got %v", err)
 	}
 }
 

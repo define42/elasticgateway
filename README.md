@@ -128,6 +128,7 @@ Configuration is environment based.
 | `SESSION_SECRET` | generated at process start | Shared secret used to sign and encrypt gateway session cookies and derive internal Elasticsearch passwords |
 | `SESSION_TTL` | `24h` | Gateway session lifetime, parsed as a Go duration such as `8h` or `30m`, or as seconds |
 | `FORCE_SECURE_COOKIES` | `false` | Always set the session cookie `Secure` flag and send `X-Forwarded-Proto: https` to Kibana, for TLS-terminating load balancers |
+| `TRUSTED_PROXIES` | empty | Comma- or space-separated proxy IPs/CIDRs allowed to supply `X-Forwarded-For`; unset ignores inbound `X-Forwarded-For` |
 | `LDAP_URL` | `ldaps://ldap:389` | LDAP server URL |
 | `LDAP_BASE_DN` | `dc=glauth,dc=com` | LDAP search base |
 | `LDAP_USER_FILTER` | `(mail=%s)` | User lookup filter; `%s` receives the login email |
@@ -143,6 +144,7 @@ Production notes:
 - Set `ELASTICSEARCH_SKIP_TLS_VERIFY=false` outside local self-signed development.
 - Mount a PEM or DER root CA certificate and set `ROOT_CA=/path/to/ca.pem` when Elasticsearch, Kibana, or LDAP use a private certificate authority. `ELASTICSEARCH_SKIP_TLS_VERIFY=true` disables verification for the shared Elasticsearch/Kibana HTTP client, and `LDAP_SKIP_TLS_VERIFY=true` disables verification for LDAP even when `ROOT_CA` is set.
 - Run the gateway behind HTTPS. If TLS terminates before the gateway, set `FORCE_SECURE_COOKIES=true` so session cookies are still sent with the `Secure` flag.
+- If a load balancer or reverse proxy sets `X-Forwarded-For`, set `TRUSTED_PROXIES` to the immediate proxy IPs or CIDRs; otherwise the gateway logs and Kibana proxy use the direct peer IP.
 - Set the same long random `SESSION_SECRET` on every gateway instance so sessions and gateway-derived Elasticsearch passwords survive restarts and load-balanced requests.
 - If `SESSION_SECRET` is unset, the gateway generates random per-process session and password keys; restart invalidates existing sessions and changes the internal Elasticsearch passwords it provisions.
 - The gateway API user needs permission to manage ILM policies, index templates, spaces, roles, native users, data views, and indices.

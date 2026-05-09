@@ -12,7 +12,6 @@ import (
 	"io"
 	"log/slog"
 	"mime"
-	"net"
 	"net/http"
 	"net/url"
 	"sort"
@@ -552,7 +551,7 @@ func (g *Gateway) logLoginSuccess(r *http.Request, submittedUsername string, use
 		slog.Int("http_status", http.StatusSeeOther),
 		slog.Any("namespaces", accessNamespaces(access)),
 	}
-	attrs = append(attrs, requestLogAttrs(r)...)
+	attrs = append(attrs, g.requestLogAttrs(r)...)
 
 	g.logger().InfoContext(r.Context(), "user login", attrs...)
 }
@@ -564,7 +563,7 @@ func (g *Gateway) logLoginFailure(r *http.Request, username string, status int, 
 		slog.Int("http_status", status),
 		slog.String("reason", reason),
 	}
-	attrs = append(attrs, requestLogAttrs(r)...)
+	attrs = append(attrs, g.requestLogAttrs(r)...)
 	if err != nil {
 		attrs = append(attrs, slog.String("error", err.Error()))
 	}
@@ -579,7 +578,7 @@ func (g *Gateway) logLogout(r *http.Request, sessionData Session, authenticated 
 		slog.Bool("authenticated", authenticated),
 		slog.Int("http_status", http.StatusSeeOther),
 	}
-	attrs = append(attrs, requestLogAttrs(r)...)
+	attrs = append(attrs, g.requestLogAttrs(r)...)
 
 	g.logger().InfoContext(r.Context(), "user logout", attrs...)
 }
@@ -617,30 +616,16 @@ func accessNamespaces(access []authz.Access) []string {
 	return namespaces
 }
 
-func requestLogAttrs(r *http.Request) []any {
+func (g *Gateway) requestLogAttrs(r *http.Request) []any {
 	attrs := []any{
 		slog.String("method", r.Method),
-		slog.String("client_ip", clientIP(r)),
+		slog.String("client_ip", g.clientIP(r)),
 		slog.String("remote_addr", r.RemoteAddr),
 	}
 	if r.URL != nil {
 		attrs = append(attrs, slog.String("path", r.URL.Path))
 	}
 	return attrs
-}
-
-func clientIP(r *http.Request) string {
-	for forwarded := range strings.SplitSeq(r.Header.Get("X-Forwarded-For"), ",") {
-		if ip := strings.TrimSpace(forwarded); ip != "" {
-			return ip
-		}
-	}
-
-	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
-	if err == nil {
-		return host
-	}
-	return strings.TrimSpace(r.RemoteAddr)
 }
 
 func (g *Gateway) authorizeIngestRequest(r *http.Request, indexName string) (string, error) {

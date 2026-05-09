@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"reflect"
 	"strings"
 	"testing"
@@ -18,7 +19,7 @@ import (
 	elasticpkg "github.com/define42/elasticgateway/internal/elastic"
 )
 
-func TestGatewayLogsLoginSuccessAsJSON(t *testing.T) {
+func TestGatewayLogsLoginSuccessIgnoresSpoofedXForwardedForByDefault(t *testing.T) {
 	var logOutput bytes.Buffer
 	elasticSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
@@ -48,6 +49,7 @@ func TestGatewayLogsLoginSuccessAsJSON(t *testing.T) {
 	request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=alice&password=dogood"))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	request.Header.Set("X-Forwarded-For", "203.0.113.7, 10.0.0.12")
+	request.RemoteAddr = "198.51.100.22:54321"
 
 	gateway.Handler().ServeHTTP(recorder, request)
 
@@ -59,12 +61,82 @@ func TestGatewayLogsLoginSuccessAsJSON(t *testing.T) {
 	if entry["event"] != "user_login" || entry["msg"] != "user login" || entry["level"] != "INFO" {
 		t.Fatalf("unexpected login log entry: %#v", entry)
 	}
-	if entry["username"] != "alice" || entry["client_ip"] != "203.0.113.7" || entry["http_status"] != float64(http.StatusSeeOther) {
+	if entry["username"] != "alice" || entry["client_ip"] != "198.51.100.22" || entry["http_status"] != float64(http.StatusSeeOther) {
 		t.Fatalf("unexpected login log fields: %#v", entry)
 	}
 	namespaces, ok := entry["namespaces"].([]any)
 	if !ok || len(namespaces) != 1 || namespaces[0] != "team1" {
 		t.Fatalf("expected team1 namespace in login log, got %#v", entry["namespaces"])
+	}
+}
+
+func TestGatewayLogsLoginSuccessUsesTrustedXForwardedFor(t *testing.T) {
+	var logOutput bytes.Buffer
+	elasticSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /_security/user/alice":
+			http.NotFound(w, r)
+		case "PUT /_security/role/gateway_team1_user":
+			w.WriteHeader(http.StatusOK)
+		case "PUT /_security/user/alice":
+			w.WriteHeader(http.StatusCreated)
+		default:
+			t.Fatalf("unexpected Elasticsearch request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer elasticSearch.Close()
+
+	gateway := New(elasticpkg.NewClient(appconfig.Config{
+		ElasticsearchURL: elasticSearch.URL,
+		HTTPClient:       elasticSearch.Client(),
+		TrustedProxies:   []netip.Prefix{mustTestPrefix(t, "10.0.0.0/8")},
+	}), func(username, _ string) (*authz.User, []authz.Access, error) {
+		return &authz.User{Name: username}, []authz.Access{
+			{Group: "team1_user", Namespace: "team1", PullOnly: true},
+		}, nil
+	})
+	gateway.Logger = testJSONLogger(&logOutput)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=alice&password=dogood"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("X-Forwarded-For", "192.0.2.200, 203.0.113.7, 10.0.0.12")
+	request.RemoteAddr = "10.0.0.13:54321"
+
+	gateway.Handler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("expected status 303, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+
+	entry := onlyLogEntry(t, &logOutput)
+	if entry["username"] != "alice" || entry["client_ip"] != "203.0.113.7" || entry["remote_addr"] != "10.0.0.13:54321" {
+		t.Fatalf("unexpected login log fields: %#v", entry)
+	}
+}
+
+func TestGatewayLogsLoginFailureIgnoresXForwardedForFromUntrustedPeer(t *testing.T) {
+	var logOutput bytes.Buffer
+	gateway := New(elasticpkg.NewClient(appconfig.Config{
+		TrustedProxies: []netip.Prefix{mustTestPrefix(t, "10.0.0.0/8")},
+	}), nil)
+	gateway.Logger = testJSONLogger(&logOutput)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=alice&password=wrong"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	request.Header.Set("X-Forwarded-For", "203.0.113.7")
+	request.RemoteAddr = "198.51.100.22:54321"
+
+	gateway.Handler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status 401, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+
+	entry := onlyLogEntry(t, &logOutput)
+	if entry["client_ip"] != "198.51.100.22" || entry["remote_addr"] != "198.51.100.22:54321" {
+		t.Fatalf("unexpected login-failure log fields: %#v", entry)
 	}
 }
 
@@ -253,6 +325,75 @@ func TestKibanaProxyForceSecureCookiesForwardsHTTPS(t *testing.T) {
 	}
 	if forwardedProto != "https" {
 		t.Fatalf("expected forced X-Forwarded-Proto https, got %q", forwardedProto)
+	}
+}
+
+func TestKibanaProxyIgnoresSpoofedXForwardedForByDefault(t *testing.T) {
+	var forwardedFor string
+	kibana := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		forwardedFor = r.Header.Get("X-Forwarded-For")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer kibana.Close()
+
+	gateway := New(elasticpkg.NewClient(appconfig.Config{KibanaURL: kibana.URL}), nil)
+	encoded, err := gateway.EncodeSessionCookieValue(Session{
+		User:       &authz.User{Name: "alice"},
+		AuthHeader: BuildBasicAuthorization("alice", "secret"),
+	})
+	if err != nil {
+		t.Fatalf("encode session cookie: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/kibana/app/home", nil)
+	request.Header.Set("X-Forwarded-For", "203.0.113.7")
+	request.RemoteAddr = "198.51.100.22:54321"
+	request.AddCookie(&http.Cookie{Name: SessionCookieName, Value: encoded})
+
+	gateway.Handler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if forwardedFor != "198.51.100.22" {
+		t.Fatalf("expected direct peer X-Forwarded-For, got %q", forwardedFor)
+	}
+}
+
+func TestKibanaProxyForwardsSanitizedTrustedXForwardedFor(t *testing.T) {
+	var forwardedFor string
+	kibana := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		forwardedFor = r.Header.Get("X-Forwarded-For")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer kibana.Close()
+
+	gateway := New(elasticpkg.NewClient(appconfig.Config{
+		KibanaURL:      kibana.URL,
+		TrustedProxies: []netip.Prefix{mustTestPrefix(t, "10.0.0.0/8")},
+	}), nil)
+	encoded, err := gateway.EncodeSessionCookieValue(Session{
+		User:       &authz.User{Name: "alice"},
+		AuthHeader: BuildBasicAuthorization("alice", "secret"),
+	})
+	if err != nil {
+		t.Fatalf("encode session cookie: %v", err)
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/kibana/app/home", nil)
+	request.Header.Set("X-Forwarded-For", "192.0.2.200, 203.0.113.7, 10.0.0.12")
+	request.RemoteAddr = "10.0.0.13:54321"
+	request.AddCookie(&http.Cookie{Name: SessionCookieName, Value: encoded})
+
+	gateway.Handler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if forwardedFor != "203.0.113.7, 10.0.0.12, 10.0.0.13" {
+		t.Fatalf("expected sanitized X-Forwarded-For chain, got %q", forwardedFor)
 	}
 }
 
@@ -483,6 +624,16 @@ func onlyLogEntry(t *testing.T, output *bytes.Buffer) map[string]any {
 		t.Fatalf("decode JSON log entry: %v\n%s", err, lines[0])
 	}
 	return entry
+}
+
+func mustTestPrefix(t *testing.T, value string) netip.Prefix {
+	t.Helper()
+
+	prefix, err := netip.ParsePrefix(value)
+	if err != nil {
+		t.Fatalf("parse test prefix %q: %v", value, err)
+	}
+	return prefix
 }
 
 func findTestCookie(t *testing.T, cookies []*http.Cookie, name string) *http.Cookie {
