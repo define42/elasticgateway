@@ -24,12 +24,20 @@ func TestPermissionsFromGroup(t *testing.T) {
 		wantOK        bool
 	}{
 		{
-			name:          "rwd group parses full access",
-			group:         "team10_rwd",
+			name:          "admin group parses full access",
+			group:         "team10_admin",
 			wantNamespace: "team10",
 			wantPullOnly:  false,
 			wantDelete:    true,
 			wantOK:        true,
+		},
+		{
+			name:          "rwd group is rejected",
+			group:         "team10_rwd",
+			wantNamespace: "",
+			wantPullOnly:  false,
+			wantDelete:    false,
+			wantOK:        false,
 		},
 		{
 			name:          "rd group is rejected",
@@ -73,7 +81,7 @@ func TestPermissionsFromGroup(t *testing.T) {
 		},
 		{
 			name:          "invalid suffix is rejected",
-			group:         "team10_admin",
+			group:         "team10_operator",
 			wantNamespace: "",
 			wantPullOnly:  false,
 			wantDelete:    false,
@@ -114,7 +122,7 @@ func TestGroupNameFromDN(t *testing.T) {
 	}{
 		{name: "cn prefix", dn: "cn=team10_rw,ou=groups,dc=glauth,dc=com", want: "team10_rw"},
 		{name: "ou prefix", dn: "ou=team10_user,dc=glauth,dc=com", want: "team10_user"},
-		{name: "plain value", dn: "team10_rwd", want: "team10_rwd"},
+		{name: "plain value", dn: "team10_admin", want: "team10_admin"},
 	}
 
 	for _, tt := range tests {
@@ -233,7 +241,7 @@ func TestMorePermissive(t *testing.T) {
 		want bool
 	}{
 		{
-			name: "full access outranks write-only access",
+			name: "admin access outranks write-only access",
 			a:    &authzpkg.User{Name: "a", Namespace: "team10", PullOnly: false, DeleteAllowed: true},
 			b:    &authzpkg.User{Name: "b", Namespace: "team10", PullOnly: false, DeleteAllowed: false},
 			want: true,
@@ -245,7 +253,7 @@ func TestMorePermissive(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "full access outranks read-only access",
+			name: "admin access outranks read-only access",
 			a:    &authzpkg.User{Name: "a", Namespace: "team10", PullOnly: false, DeleteAllowed: true},
 			b:    &authzpkg.User{Name: "b", Namespace: "team10", PullOnly: true, DeleteAllowed: false},
 			want: true,

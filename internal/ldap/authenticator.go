@@ -178,11 +178,11 @@ func GroupNameFromDN(dn string) string {
 	}
 }
 
-// PermissionsFromGroup parses namespace access suffixes like _user and _rwd.
+// PermissionsFromGroup parses namespace access suffixes like _user and _admin.
 func PermissionsFromGroup(group string) (namespace string, pullOnly bool, deleteAllowed bool, ok bool) {
 	switch {
-	case strings.HasSuffix(group, "_rwd"):
-		ns := strings.TrimSuffix(group, "_rwd")
+	case strings.HasSuffix(group, "_admin"):
+		ns := strings.TrimSuffix(group, "_admin")
 		return ns, false, true, true
 	case strings.HasSuffix(group, "_rw"):
 		ns := strings.TrimSuffix(group, "_rw")

@@ -134,7 +134,7 @@ func ResolveIngestWriteNamespace(access []Access, indexName string) (string, boo
 func RoleModeForAccess(access Access) string {
 	switch {
 	case !access.PullOnly && access.DeleteAllowed:
-		return "rwd"
+		return "admin"
 	case !access.PullOnly:
 		return "rw"
 	default:
@@ -150,7 +150,7 @@ func BuildGatewayRoleName(namespace, mode string) string {
 // AllowedActionsForAccess maps a role mode to Elasticsearch index privileges.
 func AllowedActionsForAccess(mode string) []string {
 	switch mode {
-	case "rwd":
+	case "admin":
 		return []string{"read", "write", "delete", "create_index", "view_index_metadata"}
 	case "rw":
 		return []string{"read", "write", "create_index", "view_index_metadata"}

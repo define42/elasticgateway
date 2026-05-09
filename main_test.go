@@ -638,7 +638,7 @@ func TestGatewayLoginReservedInternalUserReturnsForbidden(t *testing.T) {
 
 	gateway := testGatewayHandlerWithAuth(testConfigWithKibana(elasticSearch, kibana), func(username, _ string) (*authzpkg.User, []authzpkg.Access, error) {
 		return &authzpkg.User{Name: username, Namespace: "team1", PullOnly: false, DeleteAllowed: true}, []authzpkg.Access{
-			{Group: "team1_rwd", Namespace: "team1", PullOnly: false, DeleteAllowed: true},
+			{Group: "team1_admin", Namespace: "team1", PullOnly: false, DeleteAllowed: true},
 		}, nil
 	})
 
@@ -697,7 +697,7 @@ func TestGatewayLoginSuccessProvisionsUserAndSession(t *testing.T) {
 			spaceBody = decodeRequestBody(t, r)
 			w.WriteHeader(http.StatusCreated)
 			_, _ = io.WriteString(w, `{}`)
-		case "PUT /api/security/role/gateway_team1_rwd":
+		case "PUT /api/security/role/gateway_team1_admin":
 			roleBody = decodeRequestBody(t, r)
 			w.WriteHeader(http.StatusNoContent)
 		case "GET /s/team1/api/data_views/data_view/gateway-index-pattern-team1":
@@ -716,7 +716,7 @@ func TestGatewayLoginSuccessProvisionsUserAndSession(t *testing.T) {
 
 	gateway := testGatewayHandlerWithAuth(testConfigWithKibana(elasticSearch, kibana), func(username, _ string) (*authzpkg.User, []authzpkg.Access, error) {
 		return &authzpkg.User{Name: username, Namespace: "team1", PullOnly: false, DeleteAllowed: true}, []authzpkg.Access{
-			{Group: "team1_rwd", Namespace: "team1", PullOnly: false, DeleteAllowed: true},
+			{Group: "team1_admin", Namespace: "team1", PullOnly: false, DeleteAllowed: true},
 		}, nil
 	})
 
@@ -745,7 +745,7 @@ func TestGatewayLoginSuccessProvisionsUserAndSession(t *testing.T) {
 	if !reflect.DeepEqual(kibanaCalls, []string{
 		"GET /api/spaces/space/team1",
 		"POST /api/spaces/space",
-		"PUT /api/security/role/gateway_team1_rwd",
+		"PUT /api/security/role/gateway_team1_admin",
 		"GET /s/team1/api/data_views/data_view/gateway-index-pattern-team1",
 		"POST /s/team1/api/data_views/data_view",
 		"POST /s/team1/api/data_views/default",
@@ -782,7 +782,7 @@ func TestGatewayLoginSuccessProvisionsUserAndSession(t *testing.T) {
 	if got := userBody["password"]; got == "" {
 		t.Fatalf("expected plaintext generated Elasticsearch password, got %#v", got)
 	}
-	if got := userBody["roles"]; !reflect.DeepEqual(got, []any{"gateway_team1_rwd"}) {
+	if got := userBody["roles"]; !reflect.DeepEqual(got, []any{"gateway_team1_admin"}) {
 		t.Fatalf("unexpected Elasticsearch roles: %#v", got)
 	}
 	metadata := nestedMap(t, userBody["metadata"])
@@ -823,7 +823,7 @@ func TestGatewayLoginMultiNamespaceRedirectsToKibanaHome(t *testing.T) {
 			"GET /api/spaces/space/team2":
 			w.WriteHeader(http.StatusOK)
 			_, _ = io.WriteString(w, `{}`)
-		case "PUT /api/security/role/gateway_team1_rwd",
+		case "PUT /api/security/role/gateway_team1_admin",
 			"PUT /api/security/role/gateway_team10_user",
 			"PUT /api/security/role/gateway_team2_rw":
 			w.WriteHeader(http.StatusNoContent)
@@ -848,7 +848,7 @@ func TestGatewayLoginMultiNamespaceRedirectsToKibanaHome(t *testing.T) {
 	gateway := newTestGateway(elasticpkg.NewClient(testConfigWithKibana(elasticSearch, kibana)), func(username, _ string) (*authzpkg.User, []authzpkg.Access, error) {
 		return &authzpkg.User{Name: username, Namespace: "team1", PullOnly: false, DeleteAllowed: true}, []authzpkg.Access{
 			{Group: "team10_user", Namespace: "team10", PullOnly: true},
-			{Group: "team1_rwd", Namespace: "team1", PullOnly: false, DeleteAllowed: true},
+			{Group: "team1_admin", Namespace: "team1", PullOnly: false, DeleteAllowed: true},
 			{Group: "team2_rw", Namespace: "team2", PullOnly: false},
 		}, nil
 	})
@@ -868,7 +868,7 @@ func TestGatewayLoginMultiNamespaceRedirectsToKibanaHome(t *testing.T) {
 	if len(cookies) == 0 {
 		t.Fatalf("expected login to set a session cookie")
 	}
-	if got := userBody["roles"]; !reflect.DeepEqual(got, []any{"gateway_team10_user", "gateway_team1_rwd", "gateway_team2_rw"}) {
+	if got := userBody["roles"]; !reflect.DeepEqual(got, []any{"gateway_team10_user", "gateway_team1_admin", "gateway_team2_rw"}) {
 		t.Fatalf("unexpected Elasticsearch roles: %#v", got)
 	}
 	metadata := nestedMap(t, userBody["metadata"])
@@ -903,7 +903,7 @@ func TestRoleRequestForAccessModes(t *testing.T) {
 			"visualize_v2": {"all"},
 		}},
 		{name: "read write", access: authzpkg.Access{Namespace: "team1", PullOnly: false}, wantAllowed: []string{"read", "write", "create_index", "view_index_metadata"}, wantBase: []string{"all"}, wantFeature: map[string][]string{}},
-		{name: "read write delete", access: authzpkg.Access{Namespace: "team1", PullOnly: false, DeleteAllowed: true}, wantAllowed: []string{"read", "write", "delete", "create_index", "view_index_metadata"}, wantBase: []string{"all"}, wantFeature: map[string][]string{}},
+		{name: "admin", access: authzpkg.Access{Namespace: "team1", PullOnly: false, DeleteAllowed: true}, wantAllowed: []string{"read", "write", "delete", "create_index", "view_index_metadata"}, wantBase: []string{"all"}, wantFeature: map[string][]string{}},
 	}
 
 	for _, tt := range tests {
@@ -933,15 +933,15 @@ func TestNormalizeAccessByNamespaceCombinesPermissions(t *testing.T) {
 
 	result := authzpkg.NormalizeAccessByNamespace([]authzpkg.Access{
 		{Group: "team1_rw", Namespace: "team1", PullOnly: false},
-		{Group: "team1_rwd", Namespace: "team1", PullOnly: false, DeleteAllowed: true},
+		{Group: "team1_admin", Namespace: "team1", PullOnly: false, DeleteAllowed: true},
 		{Group: "team2_user", Namespace: "team2", PullOnly: true},
 	})
 
 	if len(result) != 2 {
 		t.Fatalf("expected two namespaces, got %#v", result)
 	}
-	if got := authzpkg.RoleModeForAccess(result[0]); got != "rwd" {
-		t.Fatalf("expected team1 to combine to rwd, got %q", got)
+	if got := authzpkg.RoleModeForAccess(result[0]); got != "admin" {
+		t.Fatalf("expected team1 to combine to admin, got %q", got)
 	}
 	if got := authzpkg.RoleModeForAccess(result[1]); got != "user" {
 		t.Fatalf("expected team2 to stay user, got %q", got)
