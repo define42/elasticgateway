@@ -3,8 +3,11 @@ package config
 
 import (
 	"crypto/tls"
+	"crypto/x509"
+	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -50,24 +53,46 @@ type LDAPConfig struct {
 	UserMailDomain  string
 	StartTLS        bool
 	SkipTLSVerify   bool
+	RootCAPath      string
 }
 
 // DefaultHTTPClient builds the default upstream HTTP client for the gateway.
 func DefaultHTTPClient() *http.Client {
+	client, err := defaultHTTPClient()
+	if err != nil {
+		return &http.Client{
+			Timeout:   30 * time.Second,
+			Transport: errorRoundTripper{err: err},
+		}
+	}
+	return client
+}
+
+func defaultHTTPClient() (*http.Client, error) {
 	transport := &http.Transport{}
 	if getEnvBool("ELASTICSEARCH_SKIP_TLS_VERIFY", false) {
 		transport.TLSClientConfig = &tls.Config{InsecureSkipVerify: true} // #nosec G402 -- explicit local-dev opt-in for self-signed Elasticsearch
+	} else if rootCAPath := getEnv("ROOT_CA", ""); rootCAPath != "" {
+		rootCAs, err := RootCAPool(rootCAPath)
+		if err != nil {
+			return nil, err
+		}
+		transport.TLSClientConfig = &tls.Config{RootCAs: rootCAs}
 	}
 
 	return &http.Client{
 		Timeout:   30 * time.Second,
 		Transport: transport,
-	}
+	}, nil
 }
 
 // LoadGateway loads gateway configuration from the environment.
-func LoadGateway() Config {
+func LoadGateway() (Config, error) {
 	defaultPassword := getEnv("ELASTIC_PASSWORD", "")
+	httpClient, err := defaultHTTPClient()
+	if err != nil {
+		return Config{}, err
+	}
 
 	return Config{
 		ElasticsearchURL:      getEnv("ELASTICSEARCH_URL", DefaultElasticsearchURL),
@@ -82,8 +107,8 @@ func LoadGateway() Config {
 		ListenAddr:            getEnv("LISTEN_ADDR", DefaultListenAddr),
 		Shards:                1,
 		Replicas:              1,
-		HTTPClient:            DefaultHTTPClient(),
-	}
+		HTTPClient:            httpClient,
+	}, nil
 }
 
 // LoadLDAP loads LDAP configuration from the environment.
@@ -97,7 +122,63 @@ func LoadLDAP() LDAPConfig {
 		UserMailDomain:  getEnv("LDAP_USER_DOMAIN", "@example.com"),
 		StartTLS:        getEnvBool("LDAP_STARTTLS", false),
 		SkipTLSVerify:   getEnvBool("LDAP_SKIP_TLS_VERIFY", true),
+		RootCAPath:      getEnv("ROOT_CA", ""),
 	}
+}
+
+// RootCAPool loads a PEM or DER root CA file into a certificate pool.
+func RootCAPool(path string) (*x509.CertPool, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return nil, nil
+	}
+
+	certBytes, err := readRootCAFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read ROOT_CA %q: %w", path, err)
+	}
+
+	pool, err := x509.SystemCertPool()
+	if err != nil || pool == nil {
+		pool = x509.NewCertPool()
+	}
+
+	if pool.AppendCertsFromPEM(certBytes) {
+		return pool, nil
+	}
+
+	certs, err := x509.ParseCertificates(certBytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse ROOT_CA %q as PEM or DER certificate: %w", path, err)
+	}
+	if len(certs) == 0 {
+		return nil, fmt.Errorf("parse ROOT_CA %q as PEM or DER certificate: no certificates found", path)
+	}
+	for _, cert := range certs {
+		pool.AddCert(cert)
+	}
+	return pool, nil
+}
+
+func readRootCAFile(path string) ([]byte, error) {
+	cleanPath := filepath.Clean(path)
+	root, err := os.OpenRoot(filepath.Dir(cleanPath))
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = root.Close()
+	}()
+
+	return root.ReadFile(filepath.Base(cleanPath))
+}
+
+type errorRoundTripper struct {
+	err error
+}
+
+func (t errorRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
+	return nil, t.err
 }
 
 func getEnv(key, def string) string {

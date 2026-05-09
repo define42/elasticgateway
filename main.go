@@ -24,7 +24,10 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	cfg := appconfig.LoadGateway()
+	cfg, err := appconfig.LoadGateway()
+	if err != nil {
+		fatal(err)
+	}
 	if err := run(ctx, cfg, func(handler http.Handler) error {
 		srv := &http.Server{
 			Addr:              cfg.ListenAddr,

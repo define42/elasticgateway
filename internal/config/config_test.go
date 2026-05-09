@@ -1,7 +1,16 @@
 package config
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -26,7 +35,10 @@ func TestDefaultHTTPClient(t *testing.T) {
 func TestLoadGatewayReadsSessionSecret(t *testing.T) {
 	t.Setenv("SESSION_SECRET", "shared-session-secret-for-tests")
 
-	cfg := LoadGateway()
+	cfg, err := LoadGateway()
+	if err != nil {
+		t.Fatalf("LoadGateway: %v", err)
+	}
 	if cfg.SessionSecret != "shared-session-secret-for-tests" {
 		t.Fatalf("unexpected session secret: %q", cfg.SessionSecret)
 	}
@@ -36,7 +48,10 @@ func TestLoadGatewayReadsSessionTTL(t *testing.T) {
 	t.Run("duration", func(t *testing.T) {
 		t.Setenv("SESSION_TTL", "2h30m")
 
-		cfg := LoadGateway()
+		cfg, err := LoadGateway()
+		if err != nil {
+			t.Fatalf("LoadGateway: %v", err)
+		}
 		if cfg.SessionTTL != 150*time.Minute {
 			t.Fatalf("unexpected session ttl: %v", cfg.SessionTTL)
 		}
@@ -45,7 +60,10 @@ func TestLoadGatewayReadsSessionTTL(t *testing.T) {
 	t.Run("seconds", func(t *testing.T) {
 		t.Setenv("SESSION_TTL", "3600")
 
-		cfg := LoadGateway()
+		cfg, err := LoadGateway()
+		if err != nil {
+			t.Fatalf("LoadGateway: %v", err)
+		}
 		if cfg.SessionTTL != time.Hour {
 			t.Fatalf("unexpected session ttl: %v", cfg.SessionTTL)
 		}
@@ -55,8 +73,135 @@ func TestLoadGatewayReadsSessionTTL(t *testing.T) {
 func TestLoadGatewayReadsForceSecureCookies(t *testing.T) {
 	t.Setenv("FORCE_SECURE_COOKIES", "true")
 
-	cfg := LoadGateway()
+	cfg, err := LoadGateway()
+	if err != nil {
+		t.Fatalf("LoadGateway: %v", err)
+	}
 	if !cfg.ForceSecureCookies {
 		t.Fatal("expected FORCE_SECURE_COOKIES=true to enable forced secure cookies")
 	}
+}
+
+func TestLoadGatewayUsesPEMRootCA(t *testing.T) {
+	t.Setenv("ROOT_CA", writeRootCAPEMFile(t))
+
+	cfg, err := LoadGateway()
+	if err != nil {
+		t.Fatalf("LoadGateway: %v", err)
+	}
+
+	transport, ok := cfg.HTTPClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", cfg.HTTPClient.Transport)
+	}
+	if transport.TLSClientConfig == nil || transport.TLSClientConfig.RootCAs == nil {
+		t.Fatalf("expected TLS root CA pool, got %#v", transport.TLSClientConfig)
+	}
+}
+
+func TestLoadGatewayUsesDERRootCA(t *testing.T) {
+	t.Setenv("ROOT_CA", writeRootCADERFile(t))
+
+	cfg, err := LoadGateway()
+	if err != nil {
+		t.Fatalf("LoadGateway: %v", err)
+	}
+
+	transport, ok := cfg.HTTPClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", cfg.HTTPClient.Transport)
+	}
+	if transport.TLSClientConfig == nil || transport.TLSClientConfig.RootCAs == nil {
+		t.Fatalf("expected TLS root CA pool, got %#v", transport.TLSClientConfig)
+	}
+}
+
+func TestLoadGatewayInvalidRootCAReturnsError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "root-ca.txt")
+	if err := os.WriteFile(path, []byte("not a certificate"), 0o600); err != nil {
+		t.Fatalf("write invalid root CA: %v", err)
+	}
+	t.Setenv("ROOT_CA", path)
+
+	_, err := LoadGateway()
+	if err == nil {
+		t.Fatal("expected invalid ROOT_CA error")
+	}
+	if !strings.Contains(err.Error(), "ROOT_CA") || !strings.Contains(err.Error(), path) {
+		t.Fatalf("expected useful ROOT_CA error, got %v", err)
+	}
+}
+
+func TestLoadGatewaySkipTLSVerifyWinsOverRootCA(t *testing.T) {
+	t.Setenv("ELASTICSEARCH_SKIP_TLS_VERIFY", "true")
+	t.Setenv("ROOT_CA", filepath.Join(t.TempDir(), "missing-ca.pem"))
+
+	cfg, err := LoadGateway()
+	if err != nil {
+		t.Fatalf("LoadGateway should not read ROOT_CA when skip verify is enabled: %v", err)
+	}
+
+	transport, ok := cfg.HTTPClient.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", cfg.HTTPClient.Transport)
+	}
+	if transport.TLSClientConfig == nil || !transport.TLSClientConfig.InsecureSkipVerify {
+		t.Fatalf("expected InsecureSkipVerify, got %#v", transport.TLSClientConfig)
+	}
+}
+
+func TestLoadLDAPReadsRootCA(t *testing.T) {
+	t.Setenv("ROOT_CA", "/mounted/root-ca.pem")
+
+	cfg := LoadLDAP()
+	if cfg.RootCAPath != "/mounted/root-ca.pem" {
+		t.Fatalf("unexpected LDAP root CA path: %q", cfg.RootCAPath)
+	}
+}
+
+func writeRootCAPEMFile(t *testing.T) string {
+	t.Helper()
+
+	der := testRootCADER(t)
+	return writeTestFile(t, "root-ca.pem", pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+}
+
+func writeRootCADERFile(t *testing.T) string {
+	t.Helper()
+
+	return writeTestFile(t, "root-ca.der", testRootCADER(t))
+}
+
+func testRootCADER(t *testing.T) []byte {
+	t.Helper()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "test root CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create certificate: %v", err)
+	}
+	return der
+}
+
+func writeTestFile(t *testing.T, name string, contents []byte) string {
+	t.Helper()
+
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(path, contents, 0o600); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+	return path
 }

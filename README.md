@@ -121,6 +121,7 @@ Configuration is environment based.
 | `ELASTICSEARCH_USERNAME` | `elastic` | Elasticsearch admin/API username |
 | `ELASTICSEARCH_PASSWORD` | `ELASTIC_PASSWORD` or empty | Elasticsearch admin/API password |
 | `ELASTICSEARCH_SKIP_TLS_VERIFY` | `false` | Disable Elasticsearch TLS verification |
+| `ROOT_CA` | empty | PEM or DER root CA certificate file path used to validate Elasticsearch, Kibana, and LDAP TLS endpoints unless the matching skip-verify setting is enabled |
 | `KIBANA_URL` | `http://localhost:5601` | Kibana API URL |
 | `KIBANA_USERNAME` | `ELASTICSEARCH_USERNAME` or `elastic` | Kibana API username |
 | `KIBANA_PASSWORD` | `ELASTICSEARCH_PASSWORD` or `ELASTIC_PASSWORD` or empty | Kibana API password |
@@ -140,6 +141,7 @@ Production notes:
 
 - Set `LDAP_SKIP_TLS_VERIFY=false` with trusted LDAP certificates.
 - Set `ELASTICSEARCH_SKIP_TLS_VERIFY=false` outside local self-signed development.
+- Mount a PEM or DER root CA certificate and set `ROOT_CA=/path/to/ca.pem` when Elasticsearch, Kibana, or LDAP use a private certificate authority. `ELASTICSEARCH_SKIP_TLS_VERIFY=true` disables verification for the shared Elasticsearch/Kibana HTTP client, and `LDAP_SKIP_TLS_VERIFY=true` disables verification for LDAP even when `ROOT_CA` is set.
 - Run the gateway behind HTTPS. If TLS terminates before the gateway, set `FORCE_SECURE_COOKIES=true` so session cookies are still sent with the `Secure` flag.
 - Set the same long random `SESSION_SECRET` on every gateway instance so sessions and gateway-derived Elasticsearch passwords survive restarts and load-balanced requests.
 - If `SESSION_SECRET` is unset, the gateway generates random per-process session and password keys; restart invalidates existing sessions and changes the internal Elasticsearch passwords it provisions.

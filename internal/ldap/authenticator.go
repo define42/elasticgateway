@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 
 	"github.com/define42/elasticgateway/internal/authz"
@@ -101,19 +102,47 @@ func (a *Authenticator) userSearchFilter(mail string) string {
 
 // Dial opens an LDAP connection according to cfg.
 func Dial(cfg config.LDAPConfig) (*goldap.Conn, error) {
-	conn, err := goldap.DialURL(cfg.URL, goldap.DialWithTLSConfig(&tls.Config{InsecureSkipVerify: cfg.SkipTLSVerify})) // #nosec G402
+	tlsConfig, err := ldapTLSConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+
+	conn, err := goldap.DialURL(cfg.URL, goldap.DialWithTLSConfig(tlsConfig))
 	if err != nil {
 		return nil, err
 	}
 
 	if cfg.StartTLS && strings.HasPrefix(cfg.URL, "ldap://") {
-		if err := conn.StartTLS(&tls.Config{InsecureSkipVerify: cfg.SkipTLSVerify}); err != nil { // #nosec G402
+		if err := conn.StartTLS(tlsConfig); err != nil {
 			_ = conn.Close()
 			return nil, err
 		}
 	}
 
 	return conn, nil
+}
+
+func ldapTLSConfig(cfg config.LDAPConfig) (*tls.Config, error) {
+	tlsConfig := &tls.Config{InsecureSkipVerify: cfg.SkipTLSVerify} // #nosec G402 -- explicit LDAP local-dev opt-in.
+	if cfg.SkipTLSVerify {
+		return tlsConfig, nil
+	}
+
+	rootCAs, err := config.RootCAPool(cfg.RootCAPath)
+	if err != nil {
+		return nil, err
+	}
+	tlsConfig.RootCAs = rootCAs
+	tlsConfig.ServerName = ldapServerName(cfg.URL)
+	return tlsConfig, nil
+}
+
+func ldapServerName(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
 }
 
 // AccessFromGroups converts LDAP group DNs into gateway access entries.
