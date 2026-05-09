@@ -143,24 +143,49 @@ func TestGroupNameFromDN(t *testing.T) {
 	}
 }
 
-func TestAccessFromGroupsFiltersPrefixAndSelectsMostPermissive(t *testing.T) {
+func TestAccessFromGroupsStripsPrefixAndSelectsMostPermissive(t *testing.T) {
 	t.Parallel()
 
 	groups := []string{
-		"cn=team10_user,ou=groups,dc=glauth,dc=com",
-		"ou=team10_ingest,dc=glauth,dc=com",
+		"cn=app_elk_team10_user,ou=groups,dc=glauth,dc=com",
+		"ou=app_elk_team10_ingest,dc=glauth,dc=com",
 		"cn=other_ingest,ou=groups,dc=glauth,dc=com",
+		"cn=app_elk_team10,ou=groups,dc=glauth,dc=com",
 	}
 
-	access, user := ldappkg.AccessFromGroups("johndoe", groups, "team")
+	access, user := ldappkg.AccessFromGroups("johndoe", groups, "app_elk_")
 	if user == nil {
 		t.Fatal("expected selected user")
 	}
-	if user.Namespace != "team10" || user.PullOnly || user.DeleteAllowed {
+	if user.Group != "app_elk_team10_ingest" || user.Namespace != "team10" || user.PullOnly || user.DeleteAllowed {
 		t.Fatalf("unexpected selected user permissions: %+v", user)
 	}
 	if len(access) != 2 {
-		t.Fatalf("expected two team-prefixed access entries, got %+v", access)
+		t.Fatalf("expected two valid app_elk-prefixed access entries, got %+v", access)
+	}
+	if access[0].Group != "app_elk_team10_user" || access[0].Namespace != "team10" || !access[0].PullOnly || access[0].DeleteAllowed {
+		t.Fatalf("unexpected user access entry: %+v", access[0])
+	}
+	if access[1].Group != "app_elk_team10_ingest" || access[1].Namespace != "team10" || access[1].PullOnly || access[1].DeleteAllowed {
+		t.Fatalf("unexpected ingest access entry: %+v", access[1])
+	}
+}
+
+func TestAccessFromGroupsEmptyPrefixKeepsUnprefixedParsing(t *testing.T) {
+	t.Parallel()
+
+	access, user := ldappkg.AccessFromGroups("johndoe", []string{
+		"cn=team10_user,ou=groups,dc=glauth,dc=com",
+		"cn=team10,ou=groups,dc=glauth,dc=com",
+	}, "")
+	if user == nil {
+		t.Fatal("expected selected user")
+	}
+	if user.Group != "team10_user" || user.Namespace != "team10" || !user.PullOnly || user.DeleteAllowed {
+		t.Fatalf("unexpected selected user permissions: %+v", user)
+	}
+	if len(access) != 1 || access[0].Group != "team10_user" || access[0].Namespace != "team10" {
+		t.Fatalf("expected only the unprefixed _user access entry, got %+v", access)
 	}
 }
 
@@ -168,9 +193,9 @@ func TestAccessFromGroupsRejectsReadEditSuffix(t *testing.T) {
 	t.Parallel()
 
 	access, user := ldappkg.AccessFromGroups("reader", []string{
-		"cn=team10_user,ou=groups,dc=glauth,dc=com",
-		"cn=team10_re,ou=groups,dc=glauth,dc=com",
-	}, "team")
+		"cn=app_elk_team10_user,ou=groups,dc=glauth,dc=com",
+		"cn=app_elk_team10_re,ou=groups,dc=glauth,dc=com",
+	}, "app_elk_")
 	if user == nil {
 		t.Fatal("expected selected user")
 	}
@@ -186,11 +211,11 @@ func TestAccessFromGroupsDropsHyphenedNamespace(t *testing.T) {
 	t.Parallel()
 
 	groups := []string{
-		"cn=team10_ingest,ou=groups,dc=glauth,dc=com",
-		"cn=team10-special_ingest,ou=groups,dc=glauth,dc=com",
+		"cn=app_elk_team10_ingest,ou=groups,dc=glauth,dc=com",
+		"cn=app_elk_team10-special_ingest,ou=groups,dc=glauth,dc=com",
 	}
 
-	access, user := ldappkg.AccessFromGroups("johndoe", groups, "team")
+	access, user := ldappkg.AccessFromGroups("johndoe", groups, "app_elk_")
 	if user == nil || user.Namespace != "team10" {
 		t.Fatalf("expected selected user in team10, got %+v", user)
 	}

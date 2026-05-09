@@ -126,7 +126,7 @@ func LoadLDAP() LDAPConfig {
 		BaseDN:          getEnv("LDAP_BASE_DN", "dc=glauth,dc=com"),
 		UserFilter:      getEnv("LDAP_USER_FILTER", "(mail=%s)"),
 		GroupAttribute:  getEnv("LDAP_GROUP_ATTRIBUTE", "memberOf"),
-		GroupNamePrefix: getEnv("LDAP_GROUP_PREFIX", "team"),
+		GroupNamePrefix: getEnvAllowEmpty("LDAP_GROUP_PREFIX", "app_elk_"),
 		UserMailDomain:  getEnv("LDAP_USER_DOMAIN", "@example.com"),
 		StartTLS:        getEnvBool("LDAP_STARTTLS", false),
 		SkipTLSVerify:   getEnvBool("LDAP_SKIP_TLS_VERIFY", true),
@@ -191,6 +191,13 @@ func (t errorRoundTripper) RoundTrip(*http.Request) (*http.Response, error) {
 
 func getEnv(key, def string) string {
 	if value, ok := os.LookupEnv(key); ok && value != "" {
+		return value
+	}
+	return def
+}
+
+func getEnvAllowEmpty(key, def string) string {
+	if value, ok := os.LookupEnv(key); ok {
 		return value
 	}
 	return def

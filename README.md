@@ -11,16 +11,16 @@ It turns LDAP group membership into Elasticsearch native users, Elastic roles, K
 ## Access Model
 
 LDAP groups are the source of truth.
-The gateway reads group names from `LDAP_GROUP_ATTRIBUTE`, keeps only groups matching `LDAP_GROUP_PREFIX`, and maps suffixes to permissions:
+The gateway reads group names from `LDAP_GROUP_ATTRIBUTE`, keeps only groups matching `LDAP_GROUP_PREFIX`, strips that prefix, and maps suffixes to permissions:
 
 | LDAP group | Namespace | Kibana space privilege | Elasticsearch index pattern | Ingest |
 | --- | --- | --- | --- | --- |
-| `<namespace>_user` | `<namespace>` | full Discover, Dashboard, and Visualize access | read on `<namespace>-*` | no |
-| `<namespace>_ingest` | `<namespace>` | full space access | read and write on `<namespace>-*` | yes |
-| `<namespace>_admin` | `<namespace>` | full space access | read, write, and delete on `<namespace>-*` | yes |
+| `<LDAP_GROUP_PREFIX><namespace>_user` | `<namespace>` | full Discover, Dashboard, and Visualize access | read on `<namespace>-*` | no |
+| `<LDAP_GROUP_PREFIX><namespace>_ingest` | `<namespace>` | full space access | read and write on `<namespace>-*` | yes |
+| `<LDAP_GROUP_PREFIX><namespace>_admin` | `<namespace>` | full space access | read, write, and delete on `<namespace>-*` | yes |
 
-User groups (`<namespace>_user`) get feature-level Kibana `all` privileges for `dashboard_v2`, `visualize_v2`, and `discover_v2`; they do not get Kibana `base` privileges, so Stack Management is not granted.
-Write-capable groups (`<namespace>_ingest` and `<namespace>_admin`) get Kibana `base: ["all"]` inside their namespace space.
+User mode groups (ending in `_user` after prefix stripping) get feature-level Kibana `all` privileges for `dashboard_v2`, `visualize_v2`, and `discover_v2`; they do not get Kibana `base` privileges, so Stack Management is not granted.
+Write-capable groups (ending in `_ingest` or `_admin` after prefix stripping) get Kibana `base: ["all"]` inside their namespace space.
 
 On login, the gateway provisions:
 
@@ -135,7 +135,7 @@ Configuration is environment based.
 | `LDAP_BASE_DN` | `dc=glauth,dc=com` | LDAP search base |
 | `LDAP_USER_FILTER` | `(mail=%s)` | User lookup filter; `%s` receives the login email |
 | `LDAP_GROUP_ATTRIBUTE` | `memberOf` | Attribute containing group memberships |
-| `LDAP_GROUP_PREFIX` | `team` | Prefix required for gateway-managed groups |
+| `LDAP_GROUP_PREFIX` | `app_elk_` | Prefix required for gateway-managed groups; stripped before deriving the namespace. Set empty to accept all groups |
 | `LDAP_USER_DOMAIN` | `@example.com` | Domain appended to usernames without `@` before LDAP bind/search |
 | `LDAP_STARTTLS` | `false` | Start TLS after connecting to `ldap://` URLs |
 | `LDAP_SKIP_TLS_VERIFY` | `true` | Disable LDAP TLS verification |
@@ -191,9 +191,9 @@ The bundled LDAP fixture includes users that demonstrate permission suffixes:
 
 | Username | Password | Groups | Result |
 | --- | --- | --- | --- |
-| `testuser` | `dogood` | `team1_admin`, `team2_ingest`, `team10_user` | multiple spaces with mixed permissions |
-| `ingestuser` | `dogood` | `team10_ingest` | can write to `team10-*` ingest targets |
-| `johndoe` | `dogood` | `team10_user` | can use Discover, Dashboard, and Visualize for `team10`, cannot ingest |
+| `testuser` | `dogood` | `app_elk_team1_admin`, `app_elk_team2_ingest`, `app_elk_team10_user` | multiple spaces with mixed permissions |
+| `ingestuser` | `dogood` | `app_elk_team10_ingest` | can write to `team10-*` ingest targets |
+| `johndoe` | `dogood` | `app_elk_team10_user` | can use Discover, Dashboard, and Visualize for `team10`, cannot ingest |
 
 Example write:
 

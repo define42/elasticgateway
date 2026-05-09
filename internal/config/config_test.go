@@ -191,6 +191,34 @@ func TestLoadGatewaySkipTLSVerifyWinsOverRootCA(t *testing.T) {
 	}
 }
 
+func TestLoadLDAPDefaultGroupPrefix(t *testing.T) {
+	original, ok := os.LookupEnv("LDAP_GROUP_PREFIX")
+	if err := os.Unsetenv("LDAP_GROUP_PREFIX"); err != nil {
+		t.Fatalf("unset LDAP_GROUP_PREFIX: %v", err)
+	}
+	t.Cleanup(func() {
+		if ok {
+			_ = os.Setenv("LDAP_GROUP_PREFIX", original)
+			return
+		}
+		_ = os.Unsetenv("LDAP_GROUP_PREFIX")
+	})
+
+	cfg := LoadLDAP()
+	if cfg.GroupNamePrefix != "app_elk_" {
+		t.Fatalf("unexpected default LDAP group prefix: %q", cfg.GroupNamePrefix)
+	}
+}
+
+func TestLoadLDAPAllowsEmptyGroupPrefix(t *testing.T) {
+	t.Setenv("LDAP_GROUP_PREFIX", "")
+
+	cfg := LoadLDAP()
+	if cfg.GroupNamePrefix != "" {
+		t.Fatalf("expected empty LDAP group prefix, got %q", cfg.GroupNamePrefix)
+	}
+}
+
 func TestLoadLDAPReadsRootCA(t *testing.T) {
 	t.Setenv("ROOT_CA", "/mounted/root-ca.pem")
 

@@ -152,11 +152,15 @@ func AccessFromGroups(username string, groups []string, prefix string) ([]authz.
 
 	for _, g := range groups {
 		groupName := GroupNameFromDN(g)
-		if prefix != "" && !strings.HasPrefix(groupName, prefix) {
-			continue
+		permissionGroup := groupName
+		if prefix != "" {
+			if !strings.HasPrefix(groupName, prefix) {
+				continue
+			}
+			permissionGroup = strings.TrimPrefix(groupName, prefix)
 		}
 
-		ns, pullOnly, deleteAllowed, ok := PermissionsFromGroup(groupName)
+		ns, pullOnly, deleteAllowed, ok := PermissionsFromGroup(permissionGroup)
 		if !ok {
 			continue
 		}

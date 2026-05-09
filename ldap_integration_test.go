@@ -418,7 +418,7 @@ func waitForLDAPReady(ctx context.Context, t *testing.T, ldapURL string) {
 			BaseDN:          "dc=glauth,dc=com",
 			UserFilter:      "(mail=%s)",
 			GroupAttribute:  "memberOf",
-			GroupNamePrefix: "team",
+			GroupNamePrefix: "app_elk_",
 			UserMailDomain:  "@example.com",
 			StartTLS:        false,
 			SkipTLSVerify:   true,
