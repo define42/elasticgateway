@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"mime"
 	"net/http"
 	"net/url"
@@ -288,7 +289,7 @@ func (g *Gateway) handleDemo(w http.ResponseWriter, r *http.Request) {
 
 func (g *Gateway) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
-		g.RenderLoginPage(w, http.StatusBadGateway, LoginPageData{Error: "failed to read login form"})
+		g.RenderLoginPage(w, http.StatusBadRequest, LoginPageData{Error: "failed to read login form"})
 		return
 	}
 
@@ -323,11 +324,14 @@ func (g *Gateway) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 
 	if err := g.Client.ProvisionLoginUser(r.Context(), username, internalPassword, access); err != nil {
 		status := http.StatusBadGateway
+		message := "failed to prepare login session"
 		if errors.Is(err, elastic.ErrReservedNativeUser) {
 			status = http.StatusForbidden
+			message = "this account cannot be used for gateway login"
 		}
+		log.Printf("failed to provision login user %q: %v", username, err)
 		g.RenderLoginPage(w, status, LoginPageData{
-			Error:    err.Error(),
+			Error:    message,
 			Username: username,
 		})
 		return
@@ -472,7 +476,8 @@ func loginErrorResponse(err error) (int, string) {
 	case errors.Is(err, ldappkg.ErrUnauthorized):
 		return http.StatusForbidden, "your LDAP account does not grant access to Kibana"
 	default:
-		return http.StatusBadGateway, fmt.Sprintf("LDAP authentication failed: %v", err)
+		log.Printf("LDAP authentication failed: %v", err)
+		return http.StatusBadGateway, "LDAP authentication failed"
 	}
 }
 

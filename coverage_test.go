@@ -247,8 +247,8 @@ func TestHandleLoginSubmitCoverage(t *testing.T) {
 
 		gateway.ServeHTTP(recorder, request)
 
-		if recorder.Code != http.StatusBadGateway {
-			t.Fatalf("expected status 502, got %d", recorder.Code)
+		if recorder.Code != http.StatusBadRequest {
+			t.Fatalf("expected status 400, got %d", recorder.Code)
 		}
 		if !strings.Contains(recorder.Body.String(), "failed to read login form") {
 			t.Fatalf("expected parse-form error page, got %q", recorder.Body.String())

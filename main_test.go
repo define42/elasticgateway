@@ -614,6 +614,12 @@ func TestGatewayLoginLDAPFailureReturnsBadGateway(t *testing.T) {
 	if recorder.Code != http.StatusBadGateway {
 		t.Fatalf("expected status 502, got %d: %s", recorder.Code, recorder.Body.String())
 	}
+	if !strings.Contains(recorder.Body.String(), "LDAP authentication failed") {
+		t.Fatalf("expected generic LDAP failure message, got %q", recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), "ldap server unavailable") {
+		t.Fatalf("login page leaked raw LDAP error: %q", recorder.Body.String())
+	}
 }
 
 func TestGatewayLoginReservedInternalUserReturnsForbidden(t *testing.T) {
@@ -650,6 +656,51 @@ func TestGatewayLoginReservedInternalUserReturnsForbidden(t *testing.T) {
 
 	if recorder.Code != http.StatusForbidden {
 		t.Fatalf("expected status 403, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "this account cannot be used for gateway login") {
+		t.Fatalf("expected generic reserved-user message, got %q", recorder.Body.String())
+	}
+	if !reflect.DeepEqual(elasticSearchCalls, []string{
+		"GET /_security/user/testuser",
+	}) {
+		t.Fatalf("unexpected Elasticsearch sequence: %#v", elasticSearchCalls)
+	}
+}
+
+func TestGatewayLoginElasticsearchProvisionFailureReturnsGenericBadGateway(t *testing.T) {
+	t.Parallel()
+
+	var elasticSearchCalls []string
+	elasticSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		elasticSearchCalls = append(elasticSearchCalls, r.Method+" "+r.URL.Path)
+
+		if r.Method != http.MethodGet || r.URL.Path != "/_security/user/testuser" {
+			t.Fatalf("unexpected Elasticsearch request: %s %s", r.Method, r.URL.Path)
+		}
+		http.Error(w, "TLS handshake failed for elastic.internal.example:9200", http.StatusInternalServerError)
+	}))
+	defer elasticSearch.Close()
+
+	gateway := testGatewayHandlerWithAuth(testConfig(elasticSearch), func(username, _ string) (*authzpkg.User, []authzpkg.Access, error) {
+		return &authzpkg.User{Name: username, Namespace: "team1", DeleteAllowed: true}, []authzpkg.Access{
+			{Group: "team1_admin", Namespace: "team1", DeleteAllowed: true},
+		}, nil
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=testuser&password=dogood"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	gateway.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("expected status 502, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "failed to prepare login session") {
+		t.Fatalf("expected generic provisioning failure message, got %q", recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), "elastic.internal.example") || strings.Contains(recorder.Body.String(), "TLS handshake") {
+		t.Fatalf("login page leaked raw Elasticsearch error: %q", recorder.Body.String())
 	}
 	if !reflect.DeepEqual(elasticSearchCalls, []string{
 		"GET /_security/user/testuser",
