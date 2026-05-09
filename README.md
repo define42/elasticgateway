@@ -37,8 +37,8 @@ If two namespaces could match one ingest path, the longest namespace wins.
 Writes use one of:
 
 ```text
-POST /ingest/<namespace>-<index>
-POST /ingest/<namespace>-<index>/_bulk
+POST /elasticgateway/ingest/<namespace>-<index>
+POST /elasticgateway/ingest/<namespace>-<index>/_bulk
 ```
 
 The namespace prefix is the authorization boundary.
@@ -54,7 +54,7 @@ That timestamp controls the daily rollover alias:
 For:
 
 ```text
-POST /ingest/team10-hello
+POST /elasticgateway/ingest/team10-hello
 event_time = 2024-12-30T10:11:12Z
 ```
 
@@ -94,21 +94,23 @@ For aliases that already exist, the gateway resolves the concrete write backing 
 
 ## HTTP API
 
-`GET /` redirects to `/login`.
+`GET /` renders the gateway login page when no valid gateway session cookie is present, and proxies Kibana unchanged when a valid session exists.
 
-`GET /login` renders the login page. If the request already has a valid session cookie, it redirects to `/kibana/s/<first_namespace>/app/home`, or `/kibana/app/home` when the session has no namespace access.
+`GET /elasticgateway/login` renders the login page. If the request already has a valid session cookie, it redirects to the sanitized `next` query value, or `/` when no safe `next` is supplied.
 
-`POST /login` authenticates against LDAP, provisions Elasticsearch and Kibana resources, sets the session cookie, and redirects to the first namespace space in Kibana.
+`POST /elasticgateway/login` authenticates against LDAP, provisions Elasticsearch and Kibana resources, sets the session cookie, and redirects to the sanitized `next` form value, or `/` when no safe `next` is supplied.
 
-`POST /logout` clears the session cookie and forgets cached ingest credentials for the logged-in user. Kibana logout requests under `/kibana/auth/logout`, `/kibana/logout`, `/kibana/api/security/logout`, and `/kibana/security/logout` are handled the same way.
+`POST /elasticgateway/logout` clears the session cookie and forgets cached ingest credentials for the logged-in user. Kibana logout requests such as `/auth/logout`, `/logout`, `/api/security/logout`, `/security/logout`, and their space-prefixed variants are handled the same way.
 
-`/kibana` and `/kibana/*` reverse proxy Kibana. A valid gateway session is required.
+All non-`/elasticgateway/*` paths reverse proxy Kibana without path rewriting when a valid gateway session is present. Without a valid session, browser `GET` and `HEAD` requests render the login page in place.
 
-`GET /demo` serves a browser form for sending test ingest requests.
+`GET /elasticgateway/demo` serves a browser form for sending test ingest requests.
 
-`POST /ingest/<namespace>-<index>` writes one JSON document to Elasticsearch. Authentication can be HTTP Basic auth with LDAP credentials or a gateway session cookie.
+`GET /elasticgateway/healthz` and `GET /elasticgateway/readyz` expose health and readiness probes.
 
-`POST /ingest/<namespace>-<index>/_bulk` writes Elasticsearch-style NDJSON action/source pairs to Elasticsearch through the bulk API. Each source document must include `event_time`, and each source document is routed independently to its daily rollover alias.
+`POST /elasticgateway/ingest/<namespace>-<index>` writes one JSON document to Elasticsearch. Authentication can be HTTP Basic auth with LDAP credentials or a gateway session cookie.
+
+`POST /elasticgateway/ingest/<namespace>-<index>/_bulk` writes Elasticsearch-style NDJSON action/source pairs to Elasticsearch through the bulk API. Each source document must include `event_time`, and each source document is routed independently to its daily rollover alias.
 
 ## Configuration
 
@@ -164,10 +166,10 @@ The local stack exposes:
 | Gateway | `http://localhost:8080` |
 | Elasticsearch | `http://localhost:9200` |
 | Kibana direct service/API | `http://localhost:5601` |
-| Kibana through the gateway | `http://localhost:8080/kibana` |
+| Kibana through the gateway | `http://localhost:8080/` |
 | GLAuth LDAP | `ldaps://localhost:1389` |
 
-The gateway owns the public `/kibana` prefix and strips it before forwarding requests to Kibana.
+The gateway reserves `/elasticgateway/*` for login, logout, demo, health, readiness, and ingest routes. All other paths are proxied to Kibana unchanged after login.
 
 Default local passwords:
 
@@ -196,7 +198,7 @@ The bundled LDAP fixture includes users that demonstrate permission suffixes:
 Example write:
 
 ```bash
-curl -i http://localhost:8080/ingest/team10-hello \
+curl -i http://localhost:8080/elasticgateway/ingest/team10-hello \
   -u ingestuser:dogood \
   -H 'Content-Type: application/json' \
   -d '{
@@ -209,7 +211,7 @@ curl -i http://localhost:8080/ingest/team10-hello \
 Example bulk write:
 
 ```bash
-curl -i http://localhost:8080/ingest/team10-hello/_bulk \
+curl -i http://localhost:8080/elasticgateway/ingest/team10-hello/_bulk \
   -u ingestuser:dogood \
   -H 'Content-Type: application/x-ndjson' \
   --data-binary @- <<'NDJSON'

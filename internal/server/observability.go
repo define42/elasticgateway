@@ -20,7 +20,7 @@ type probeCheck struct {
 }
 
 func (g *Gateway) handleHealthz(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/healthz" {
+	if r.URL.Path != gatewayHealthzPath {
 		http.NotFound(w, r)
 		return
 	}
@@ -28,7 +28,7 @@ func (g *Gateway) handleHealthz(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g *Gateway) handleReadyz(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/readyz" {
+	if r.URL.Path != gatewayReadyzPath {
 		http.NotFound(w, r)
 		return
 	}

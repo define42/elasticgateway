@@ -46,7 +46,7 @@ func TestGatewayLogsLoginSuccessIgnoresSpoofedXForwardedForByDefault(t *testing.
 	gateway.Logger = testJSONLogger(&logOutput)
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=alice&password=dogood"))
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/login", strings.NewReader("username=alice&password=dogood"))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	request.Header.Set("X-Forwarded-For", "203.0.113.7, 10.0.0.12")
 	request.RemoteAddr = "198.51.100.22:54321"
@@ -98,7 +98,7 @@ func TestGatewayLogsLoginSuccessUsesTrustedXForwardedFor(t *testing.T) {
 	gateway.Logger = testJSONLogger(&logOutput)
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=alice&password=dogood"))
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/login", strings.NewReader("username=alice&password=dogood"))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	request.Header.Set("X-Forwarded-For", "192.0.2.200, 203.0.113.7, 10.0.0.12")
 	request.RemoteAddr = "10.0.0.13:54321"
@@ -123,7 +123,7 @@ func TestGatewayLogsLoginFailureIgnoresXForwardedForFromUntrustedPeer(t *testing
 	gateway.Logger = testJSONLogger(&logOutput)
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=alice&password=wrong"))
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/login", strings.NewReader("username=alice&password=wrong"))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	request.Header.Set("X-Forwarded-For", "203.0.113.7")
 	request.RemoteAddr = "198.51.100.22:54321"
@@ -146,7 +146,7 @@ func TestGatewayLogsLoginFailureAsJSON(t *testing.T) {
 	gateway.Logger = testJSONLogger(&logOutput)
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=alice&password=wrong"))
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/login", strings.NewReader("username=alice&password=wrong"))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	gateway.Handler().ServeHTTP(recorder, request)
@@ -180,7 +180,7 @@ func TestGatewayLogsUpstreamFailureDetailsAndReturnsGenericError(t *testing.T) {
 	gateway.Logger = testJSONLogger(&logOutput)
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
 	request.Header.Set("Content-Type", "application/json")
 	request.SetBasicAuth("alice", "secret")
 
@@ -255,7 +255,7 @@ func TestGatewayLogsLogoutAsJSON(t *testing.T) {
 	}
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/logout", nil)
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/logout", nil)
 	request.AddCookie(&http.Cookie{Name: SessionCookieName, Value: encoded})
 
 	gateway.Handler().ServeHTTP(recorder, request)
@@ -277,7 +277,7 @@ func TestSessionCookieSecureHonorsForceSecureCookies(t *testing.T) {
 	gateway := New(elasticpkg.NewClient(appconfig.Config{ForceSecureCookies: true}), nil)
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/login", nil)
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/login", nil)
 
 	if err := gateway.setSessionCookie(recorder, request, Session{User: &authz.User{Name: "alice"}}); err != nil {
 		t.Fatalf("set session cookie: %v", err)
@@ -293,7 +293,7 @@ func TestSessionCookieMaxAgeHonorsSessionTTL(t *testing.T) {
 	gateway := New(elasticpkg.NewClient(appconfig.Config{SessionTTL: 90 * time.Minute}), nil)
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/login", nil)
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/login", nil)
 
 	if err := gateway.setSessionCookie(recorder, request, Session{User: &authz.User{Name: "alice"}}); err != nil {
 		t.Fatalf("set session cookie: %v", err)
@@ -364,7 +364,7 @@ func TestClearSessionCookieSecureHonorsForceSecureCookies(t *testing.T) {
 	gateway := New(elasticpkg.NewClient(appconfig.Config{ForceSecureCookies: true}), nil)
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/logout", nil)
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/logout", nil)
 
 	gateway.clearSessionCookie(recorder, request)
 
@@ -549,7 +549,7 @@ func TestHealthAndReadyzProbeElasticsearchAndKibana(t *testing.T) {
 		HTTPClient:       upstream.Client(),
 	}), nil)
 
-	for _, path := range []string{"/healthz", "/readyz"} {
+	for _, path := range []string{"/elasticgateway/healthz", "/elasticgateway/readyz"} {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodGet, path, nil)
 
@@ -595,7 +595,7 @@ func TestReadyzReturnsUnavailableWhenKibanaPingFails(t *testing.T) {
 	}), nil)
 	gateway.Logger = testJSONLogger(&logOutput)
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	request := httptest.NewRequest(http.MethodGet, "/elasticgateway/readyz", nil)
 
 	gateway.Handler().ServeHTTP(recorder, request)
 
@@ -628,7 +628,7 @@ func TestReadyzReturnsUnavailableWhenKibanaPingFails(t *testing.T) {
 
 func TestDecodeIngestDocumentRejectsContentLengthOverLimit(t *testing.T) {
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
 	request.Header.Set("Content-Type", "application/json")
 	request.ContentLength = maxIngestRequestBodyBytes + 1
 
@@ -681,7 +681,7 @@ func TestDecodeIngestDocumentsReturnRequestEntityTooLargeAfterReadingPastLimit(t
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			recorder := httptest.NewRecorder()
-			request := httptest.NewRequest(http.MethodPost, "/ingest/orders-demo", strings.NewReader(tt.body))
+			request := httptest.NewRequest(http.MethodPost, "/elasticgateway/ingest/orders-demo", strings.NewReader(tt.body))
 			request.Header.Set("Content-Type", tt.contentType)
 			request.ContentLength = -1
 
@@ -795,7 +795,7 @@ func loginSessionPassword(t *testing.T, gateway *Gateway) string {
 	t.Helper()
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=alice&password=dogood"))
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/login", strings.NewReader("username=alice&password=dogood"))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	gateway.Handler().ServeHTTP(recorder, request)

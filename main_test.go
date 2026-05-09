@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"reflect"
 	"strings"
 	"sync"
@@ -411,7 +412,7 @@ func TestGatewayIngestEnsuresKibanaDataView(t *testing.T) {
 	defer kibana.Close()
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello"}`))
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello"}`))
 	request.Header.Set("Content-Type", "application/json")
 	addTestIngestBasicAuth(request)
 
@@ -434,7 +435,7 @@ func TestGatewayIngestEnsuresKibanaDataView(t *testing.T) {
 	}
 }
 
-func TestGatewayRootRedirectsToLogin(t *testing.T) {
+func TestGatewayRootRendersLogin(t *testing.T) {
 	t.Parallel()
 
 	gateway := testGatewayHandler(appconfig.Config{})
@@ -443,11 +444,42 @@ func TestGatewayRootRedirectsToLogin(t *testing.T) {
 
 	gateway.ServeHTTP(recorder, request)
 
-	if recorder.Code != http.StatusSeeOther {
-		t.Fatalf("expected status 303, got %d", recorder.Code)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", recorder.Code)
 	}
-	if got := recorder.Header().Get("Location"); got != "/login" {
-		t.Fatalf("expected redirect to /login, got %q", got)
+	body := recorder.Body.String()
+	if !strings.Contains(body, `action="/elasticgateway/login"`) || !strings.Contains(body, `name="next" value="/"`) {
+		t.Fatalf("expected login form with root next, got %q", body)
+	}
+}
+
+func TestGatewayUnauthenticatedKibanaPathsRenderLoginWithNext(t *testing.T) {
+	t.Parallel()
+
+	gateway := testGatewayHandler(appconfig.Config{})
+	tests := []struct {
+		path string
+		next string
+	}{
+		{path: "/app/home", next: "/app/home"},
+		{path: "/s/team1/app/home?x=1", next: "/s/team1/app/home?x=1"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodGet, tt.path, nil)
+
+			gateway.ServeHTTP(recorder, request)
+
+			if recorder.Code != http.StatusOK {
+				t.Fatalf("expected status 200, got %d", recorder.Code)
+			}
+			body := recorder.Body.String()
+			if !strings.Contains(body, `action="/elasticgateway/login"`) || !strings.Contains(body, `name="next" value="`+tt.next+`"`) {
+				t.Fatalf("expected login form with next %q, got %q", tt.next, body)
+			}
+		})
 	}
 }
 
@@ -456,7 +488,7 @@ func TestGatewayLoginServesLoginForm(t *testing.T) {
 
 	gateway := testGatewayHandler(appconfig.Config{})
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/login", nil)
+	request := httptest.NewRequest(http.MethodGet, "/elasticgateway/login", nil)
 
 	gateway.ServeHTTP(recorder, request)
 
@@ -470,6 +502,52 @@ func TestGatewayLoginServesLoginForm(t *testing.T) {
 	if !strings.Contains(body, "<form") || !strings.Contains(body, "Username") || !strings.Contains(body, "Password") {
 		t.Fatalf("expected login form content, got %q", body)
 	}
+	if !strings.Contains(body, `action="/elasticgateway/login"`) || !strings.Contains(body, `name="next" value="/"`) {
+		t.Fatalf("expected login form to post to gateway login with default next, got %q", body)
+	}
+}
+
+func TestGatewayAuthenticatedLoginSanitizesNext(t *testing.T) {
+	t.Parallel()
+
+	gateway := newTestGateway(elasticpkg.NewClient(appconfig.Config{}), nil)
+	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, serverpkg.Session{
+		User:       &authzpkg.User{Name: "alice"},
+		AuthHeader: serverpkg.BuildBasicAuthorization("alice", "secret"),
+	})
+
+	tests := []struct {
+		name string
+		next string
+		want string
+	}{
+		{name: "missing", next: "", want: "/"},
+		{name: "local", next: "/s/team1/app/home?x=1", want: "/s/team1/app/home?x=1"},
+		{name: "external", next: "https://example.com/app/home", want: "/"},
+		{name: "protocol relative", next: "//example.com/app/home", want: "/"},
+		{name: "gateway control", next: "/elasticgateway/demo", want: "/"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			path := "/elasticgateway/login"
+			if tt.next != "" {
+				path += "?next=" + url.QueryEscape(tt.next)
+			}
+			request := httptest.NewRequest(http.MethodGet, path, nil)
+			request.AddCookie(&http.Cookie{Name: serverpkg.SessionCookieName, Value: encoded, Expires: expiresAt})
+
+			gateway.Handler().ServeHTTP(recorder, request)
+
+			if recorder.Code != http.StatusSeeOther {
+				t.Fatalf("expected status 303, got %d", recorder.Code)
+			}
+			if got := recorder.Header().Get("Location"); got != tt.want {
+				t.Fatalf("expected redirect %q, got %q", tt.want, got)
+			}
+		})
+	}
 }
 
 func TestGatewayLoginRejectsUnsupportedMethod(t *testing.T) {
@@ -477,7 +555,7 @@ func TestGatewayLoginRejectsUnsupportedMethod(t *testing.T) {
 
 	gateway := testGatewayHandler(appconfig.Config{})
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPut, "/login", nil)
+	request := httptest.NewRequest(http.MethodPut, "/elasticgateway/login", nil)
 
 	gateway.ServeHTTP(recorder, request)
 
@@ -494,7 +572,7 @@ func TestGatewayDemoServesDemoForm(t *testing.T) {
 
 	gateway := testGatewayHandler(appconfig.Config{})
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/demo", nil)
+	request := httptest.NewRequest(http.MethodGet, "/elasticgateway/demo", nil)
 
 	gateway.ServeHTTP(recorder, request)
 
@@ -511,7 +589,7 @@ func TestGatewayDemoServesDemoForm(t *testing.T) {
 	if !strings.Contains(body, "LDAP Username") || !strings.Contains(body, "LDAP Password") {
 		t.Fatalf("expected demo page to include LDAP credential fields, got %q", body)
 	}
-	if !strings.Contains(body, "/ingest/") {
+	if !strings.Contains(body, "/elasticgateway/ingest/") {
 		t.Fatalf("expected demo page to reference ingest endpoint, got %q", body)
 	}
 }
@@ -521,7 +599,7 @@ func TestGatewayDemoRejectsNonGet(t *testing.T) {
 
 	gateway := testGatewayHandler(appconfig.Config{})
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/demo", nil)
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/demo", nil)
 
 	gateway.ServeHTTP(recorder, request)
 
@@ -533,12 +611,69 @@ func TestGatewayDemoRejectsNonGet(t *testing.T) {
 	}
 }
 
+func TestGatewayLegacyRootGatewayPathsAreNotAliases(t *testing.T) {
+	t.Parallel()
+
+	elasticSearch := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected Elasticsearch request for legacy path: %s %s", r.Method, r.URL.Path)
+	}))
+	defer elasticSearch.Close()
+
+	gateway := testGatewayHandler(testConfig(elasticSearch))
+
+	t.Run("login post is not gateway login", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=testuser&password=dogood"))
+		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+		gateway.ServeHTTP(recorder, request)
+
+		if recorder.Code != http.StatusUnauthorized {
+			t.Fatalf("expected status 401, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+		if strings.Contains(recorder.Header().Get("Set-Cookie"), serverpkg.SessionCookieName+"=") {
+			t.Fatalf("did not expect legacy login path to set a session cookie")
+		}
+	})
+
+	t.Run("demo get is a Kibana path", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/demo", nil)
+
+		gateway.ServeHTTP(recorder, request)
+
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("expected status 200, got %d", recorder.Code)
+		}
+		body := recorder.Body.String()
+		if strings.Contains(body, "Gateway Demo Console") || !strings.Contains(body, `name="next" value="/demo"`) {
+			t.Fatalf("expected legacy demo path to render login for Kibana path, got %q", body)
+		}
+	})
+
+	t.Run("ingest post is not gateway ingest", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
+		request.Header.Set("Content-Type", "application/json")
+		addTestIngestBasicAuth(request)
+
+		gateway.ServeHTTP(recorder, request)
+
+		if recorder.Code != http.StatusUnauthorized {
+			t.Fatalf("expected status 401, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+		if !strings.Contains(recorder.Body.String(), "gateway login required") {
+			t.Fatalf("expected gateway-login-required response, got %q", recorder.Body.String())
+		}
+	})
+}
+
 func TestGatewayIngestBasePathReturnsNotFound(t *testing.T) {
 	t.Parallel()
 
 	gateway := testGatewayHandler(appconfig.Config{})
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/ingest", nil)
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/ingest", nil)
 
 	gateway.ServeHTTP(recorder, request)
 
@@ -557,7 +692,7 @@ func TestGatewayAuthenticatedLoginRedirectsToKibana(t *testing.T) {
 	})
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/login", nil)
+	request := httptest.NewRequest(http.MethodGet, "/elasticgateway/login", nil)
 	request.AddCookie(&http.Cookie{Name: serverpkg.SessionCookieName, Value: encoded, Expires: expiresAt})
 
 	gateway.Handler().ServeHTTP(recorder, request)
@@ -565,7 +700,7 @@ func TestGatewayAuthenticatedLoginRedirectsToKibana(t *testing.T) {
 	if recorder.Code != http.StatusSeeOther {
 		t.Fatalf("expected status 303, got %d", recorder.Code)
 	}
-	if got := recorder.Header().Get("Location"); got != "/kibana/app/home" {
+	if got := recorder.Header().Get("Location"); got != "/" {
 		t.Fatalf("expected redirect to Kibana home, got %q", got)
 	}
 }
@@ -583,7 +718,7 @@ func TestGatewayLoginInvalidCredentialsReturnsUnauthorized(t *testing.T) {
 	})
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=testuser&password=wrong"))
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/login", strings.NewReader("username=testuser&password=wrong"))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	gateway.ServeHTTP(recorder, request)
@@ -612,7 +747,7 @@ func TestGatewayLoginUnauthorizedGroupsReturnsUnauthorized(t *testing.T) {
 	})
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=testuser&password=dogood"))
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/login", strings.NewReader("username=testuser&password=dogood&next=%2Fs%2Fteam1%2Fapp%2Fhome%3Ffoo%3Dbar"))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	gateway.ServeHTTP(recorder, request)
@@ -644,7 +779,7 @@ func TestGatewayLoginLDAPFailureReturnsBadGateway(t *testing.T) {
 	})
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=testuser&password=dogood"))
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/login", strings.NewReader("username=testuser&password=dogood&next=%2Fs%2Fteam1%2Fapp%2Fhome%3Ffoo%3Dbar"))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	gateway.ServeHTTP(recorder, request)
@@ -687,7 +822,7 @@ func TestGatewayLoginReservedInternalUserReturnsForbidden(t *testing.T) {
 	})
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=testuser&password=dogood"))
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/login", strings.NewReader("username=testuser&password=dogood&next=%2Fs%2Fteam1%2Fapp%2Fhome%3Ffoo%3Dbar"))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	gateway.ServeHTTP(recorder, request)
@@ -726,7 +861,7 @@ func TestGatewayLoginElasticsearchProvisionFailureReturnsGenericBadGateway(t *te
 	})
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=testuser&password=dogood"))
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/login", strings.NewReader("username=testuser&password=dogood"))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	gateway.ServeHTTP(recorder, request)
@@ -810,7 +945,7 @@ func TestGatewayLoginSuccessProvisionsUserAndSession(t *testing.T) {
 	})
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=testuser&password=dogood"))
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/login", strings.NewReader("username=testuser&password=dogood&next=%2Fs%2Fteam1%2Fapp%2Fhome%3Ffoo%3Dbar"))
 	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	gateway.ServeHTTP(recorder, request)
@@ -818,8 +953,8 @@ func TestGatewayLoginSuccessProvisionsUserAndSession(t *testing.T) {
 	if recorder.Code != http.StatusSeeOther {
 		t.Fatalf("expected status 303, got %d: %s", recorder.Code, recorder.Body.String())
 	}
-	if got := recorder.Header().Get("Location"); got != "/kibana/s/team1/app/home" {
-		t.Fatalf("expected redirect to Kibana home, got %q", got)
+	if got := recorder.Header().Get("Location"); got != "/s/team1/app/home?foo=bar" {
+		t.Fatalf("expected redirect to requested Kibana path, got %q", got)
 	}
 	if !strings.Contains(recorder.Header().Get("Set-Cookie"), serverpkg.SessionCookieName+"=") {
 		t.Fatalf("expected session cookie, got %q", recorder.Header().Get("Set-Cookie"))
@@ -943,14 +1078,14 @@ func TestGatewayLoginMultiNamespaceRedirectsToKibanaHome(t *testing.T) {
 	})
 
 	loginRecorder := httptest.NewRecorder()
-	loginRequest := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=testuser&password=dogood"))
+	loginRequest := httptest.NewRequest(http.MethodPost, "/elasticgateway/login", strings.NewReader("username=testuser&password=dogood"))
 	loginRequest.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	gateway.Handler().ServeHTTP(loginRecorder, loginRequest)
 
 	if loginRecorder.Code != http.StatusSeeOther {
 		t.Fatalf("expected login status 303, got %d: %s", loginRecorder.Code, loginRecorder.Body.String())
 	}
-	if got := loginRecorder.Header().Get("Location"); got != "/kibana/s/team1/app/home" {
+	if got := loginRecorder.Header().Get("Location"); got != "/" {
 		t.Fatalf("expected redirect to Kibana home, got %q", got)
 	}
 	cookies := loginRecorder.Result().Cookies()
@@ -1046,11 +1181,12 @@ func TestGatewayKibanaRequiresLogin(t *testing.T) {
 
 	gateway.ServeHTTP(recorder, request)
 
-	if recorder.Code != http.StatusSeeOther {
-		t.Fatalf("expected status 303, got %d", recorder.Code)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", recorder.Code)
 	}
-	if got := recorder.Header().Get("Location"); got != "/login" {
-		t.Fatalf("expected redirect to /login, got %q", got)
+	body := recorder.Body.String()
+	if !strings.Contains(body, `action="/elasticgateway/login"`) || !strings.Contains(body, `name="next" value="/kibana/app/home"`) {
+		t.Fatalf("expected login form with requested Kibana path as next, got %q", body)
 	}
 }
 
@@ -1092,11 +1228,140 @@ func TestGatewayKibanaProxyForwardsSessionBasicAuth(t *testing.T) {
 	if upstreamAuth != serverpkg.BuildBasicAuthorization("testuser", "dogood") {
 		t.Fatalf("unexpected Authorization header: %q", upstreamAuth)
 	}
-	if upstreamPath != "/app/home" || upstreamQuery != "foo=bar" {
+	if upstreamPath != "/kibana/app/home" || upstreamQuery != "foo=bar" {
 		t.Fatalf("unexpected upstream request: path=%q query=%q", upstreamPath, upstreamQuery)
 	}
 	if body := recorder.Body.String(); body != "proxied kibana" {
 		t.Fatalf("unexpected proxy body: %q", body)
+	}
+}
+
+func TestGatewayKibanaProxyForwardsRootAssetAndAPIPaths(t *testing.T) {
+	t.Parallel()
+
+	elasticSearch := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected Elasticsearch request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer elasticSearch.Close()
+
+	var upstreamPaths []string
+	var upstreamQueries []string
+	kibana := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamPaths = append(upstreamPaths, r.URL.Path)
+		upstreamQueries = append(upstreamQueries, r.URL.RawQuery)
+		w.Header().Set("Content-Type", "text/plain")
+		_, _ = io.WriteString(w, "proxied kibana")
+	}))
+	defer kibana.Close()
+
+	gateway := newTestGateway(elasticpkg.NewClient(testConfigWithKibana(elasticSearch, kibana)), nil)
+	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, serverpkg.Session{
+		User:       &authzpkg.User{Name: "testuser"},
+		AuthHeader: serverpkg.BuildBasicAuthorization("testuser", "dogood"),
+	})
+
+	paths := []string{
+		"/",
+		"/s/team1/bootstrap.js",
+		"/49d42f259436/bundles/kbn-ui-shared-deps-src/kbn-ui-shared-deps-src.css",
+		"/49d42f259436/ui/favicons/favicon.svg",
+		"/api/core/capabilities",
+		"/internal/security/me",
+		"/app/home",
+	}
+
+	for _, path := range paths {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, path+"?foo=bar", nil)
+		request.AddCookie(&http.Cookie{Name: serverpkg.SessionCookieName, Value: encoded, Expires: expiresAt})
+
+		gateway.Handler().ServeHTTP(recorder, request)
+
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("expected status 200 for %s, got %d: %s", path, recorder.Code, recorder.Body.String())
+		}
+		if body := recorder.Body.String(); body != "proxied kibana" {
+			t.Fatalf("unexpected proxy body for %s: %q", path, body)
+		}
+	}
+
+	if !reflect.DeepEqual(upstreamPaths, paths) {
+		t.Fatalf("unexpected upstream paths: %#v", upstreamPaths)
+	}
+	if !reflect.DeepEqual(upstreamQueries, []string{"foo=bar", "foo=bar", "foo=bar", "foo=bar", "foo=bar", "foo=bar", "foo=bar"}) {
+		t.Fatalf("unexpected upstream queries: %#v", upstreamQueries)
+	}
+}
+
+func TestGatewayKibanaRootAssetPathRequiresLogin(t *testing.T) {
+	t.Parallel()
+
+	elasticSearch := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected Elasticsearch request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer elasticSearch.Close()
+
+	kibana := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected Kibana request without gateway session: %s %s", r.Method, r.URL.Path)
+	}))
+	defer kibana.Close()
+
+	gateway := testGatewayHandler(testConfigWithKibana(elasticSearch, kibana))
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/s/team1/bootstrap.js", nil)
+
+	gateway.ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", recorder.Code)
+	}
+	body := recorder.Body.String()
+	if !strings.Contains(body, `action="/elasticgateway/login"`) || !strings.Contains(body, `name="next" value="/s/team1/bootstrap.js"`) {
+		t.Fatalf("expected login form with requested asset path as next, got %q", body)
+	}
+}
+
+func TestGatewayKibanaProxySynthesizesMissingUserProfile(t *testing.T) {
+	t.Parallel()
+
+	elasticSearch := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected Elasticsearch request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer elasticSearch.Close()
+
+	var upstreamPath string
+	kibana := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamPath = r.URL.Path
+		http.Error(w, `{"error":"not found"}`, http.StatusNotFound)
+	}))
+	defer kibana.Close()
+
+	gateway := newTestGateway(elasticpkg.NewClient(testConfigWithKibana(elasticSearch, kibana)), nil)
+	encoded, expiresAt := mustEncodeSessionCookieFromData(t, gateway, serverpkg.Session{
+		User:       &authzpkg.User{Name: "testuser"},
+		AuthHeader: serverpkg.BuildBasicAuthorization("testuser", "dogood"),
+	})
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/s/team1/internal/security/user_profile?dataPath=userSettings", nil)
+	request.AddCookie(&http.Cookie{Name: serverpkg.SessionCookieName, Value: encoded, Expires: expiresAt})
+
+	gateway.Handler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if upstreamPath != "/s/team1/internal/security/user_profile" {
+		t.Fatalf("unexpected upstream path: %q", upstreamPath)
+	}
+
+	var profile map[string]any
+	if err := json.Unmarshal(recorder.Body.Bytes(), &profile); err != nil {
+		t.Fatalf("decode profile response: %v", err)
+	}
+	user := nestedMap(t, profile["user"])
+	if profile["enabled"] != true || profile["uid"] != "elasticgateway-testuser" || user["username"] != "testuser" {
+		t.Fatalf("unexpected profile response: %#v", profile)
 	}
 }
 
@@ -1177,7 +1442,7 @@ func TestGatewayKibanaProxyLeavesEmptyIndexPatternFindResultsUntouched(t *testin
 
 	const upstreamBody = `{"page":1,"per_page":10000,"total":0,"saved_objects":[]}`
 	kibana := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/api/saved_objects/_find" {
+		if r.Method != http.MethodGet || r.URL.Path != "/kibana/api/saved_objects/_find" {
 			t.Fatalf("unexpected Kibana request: %s %s", r.Method, r.URL.Path)
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -1260,7 +1525,7 @@ func TestGatewayLogoutClearsSession(t *testing.T) {
 	})
 
 	logoutRecorder := httptest.NewRecorder()
-	logoutRequest := httptest.NewRequest(http.MethodPost, "/logout", nil)
+	logoutRequest := httptest.NewRequest(http.MethodPost, "/elasticgateway/logout", nil)
 	logoutRequest.AddCookie(&http.Cookie{Name: serverpkg.SessionCookieName, Value: encoded, Expires: expiresAt})
 
 	gateway.Handler().ServeHTTP(logoutRecorder, logoutRequest)
@@ -1284,11 +1549,11 @@ func TestGatewayLogoutClearsSession(t *testing.T) {
 	kibanaRequest := httptest.NewRequest(http.MethodGet, "/kibana/app/home", nil)
 	gateway.Handler().ServeHTTP(kibanaRecorder, kibanaRequest)
 
-	if kibanaRecorder.Code != http.StatusSeeOther {
-		t.Fatalf("expected status 303 after logout, got %d", kibanaRecorder.Code)
+	if kibanaRecorder.Code != http.StatusOK {
+		t.Fatalf("expected login page after logout, got %d", kibanaRecorder.Code)
 	}
-	if got := kibanaRecorder.Header().Get("Location"); got != "/login" {
-		t.Fatalf("expected redirect to /login after logout, got %q", got)
+	if body := kibanaRecorder.Body.String(); !strings.Contains(body, `action="/elasticgateway/login"`) {
+		t.Fatalf("expected login page after logout, got %q", body)
 	}
 }
 
@@ -1310,10 +1575,11 @@ func TestGatewayKibanaLogoutClearsGatewaySession(t *testing.T) {
 		method string
 		path   string
 	}{
-		{name: "auth logout get", method: http.MethodGet, path: "/kibana/auth/logout?nextUrl=%2Fkibana%2Fapp%2Fhome"},
-		{name: "auth logout post", method: http.MethodPost, path: "/kibana/auth/logout"},
-		{name: "legacy logout", method: http.MethodGet, path: "/kibana/logout"},
-		{name: "api security logout", method: http.MethodPost, path: "/kibana/api/security/logout"},
+		{name: "auth logout get", method: http.MethodGet, path: "/auth/logout?nextUrl=%2Fapp%2Fhome"},
+		{name: "auth logout post", method: http.MethodPost, path: "/auth/logout"},
+		{name: "legacy logout", method: http.MethodGet, path: "/logout"},
+		{name: "api security logout", method: http.MethodPost, path: "/api/security/logout"},
+		{name: "space security logout", method: http.MethodPost, path: "/s/team1/security/logout"},
 	}
 
 	for _, tt := range tests {
@@ -1333,8 +1599,8 @@ func TestGatewayKibanaLogoutClearsGatewaySession(t *testing.T) {
 			if recorder.Code != http.StatusSeeOther {
 				t.Fatalf("expected logout redirect, got %d: %s", recorder.Code, recorder.Body.String())
 			}
-			if got := recorder.Header().Get("Location"); got != "/login" {
-				t.Fatalf("expected redirect to /login, got %q", got)
+			if got := recorder.Header().Get("Location"); got != "/" {
+				t.Fatalf("expected redirect to root login surface, got %q", got)
 			}
 			clearedCookie := findCookie(recorder.Result().Cookies(), serverpkg.SessionCookieName)
 			if clearedCookie == nil {
@@ -1356,7 +1622,7 @@ func findCookie(cookies []*http.Cookie, name string) *http.Cookie {
 	return nil
 }
 
-func TestGatewayInvalidSessionRedirectsToLogin(t *testing.T) {
+func TestGatewayInvalidSessionRendersLoginAndClearsCookie(t *testing.T) {
 	t.Parallel()
 
 	gateway := newTestGateway(elasticpkg.NewClient(appconfig.Config{KibanaURL: "http://kibana.example"}), nil)
@@ -1367,11 +1633,15 @@ func TestGatewayInvalidSessionRedirectsToLogin(t *testing.T) {
 
 	gateway.Handler().ServeHTTP(recorder, request)
 
-	if recorder.Code != http.StatusSeeOther {
-		t.Fatalf("expected status 303, got %d", recorder.Code)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", recorder.Code)
 	}
-	if got := recorder.Header().Get("Location"); got != "/login" {
-		t.Fatalf("expected redirect to /login, got %q", got)
+	if body := recorder.Body.String(); !strings.Contains(body, `action="/elasticgateway/login"`) || !strings.Contains(body, `name="next" value="/kibana/app/home"`) {
+		t.Fatalf("expected login page for invalid session, got %q", body)
+	}
+	clearedCookie := findCookie(recorder.Result().Cookies(), serverpkg.SessionCookieName)
+	if clearedCookie == nil || clearedCookie.Value != "" || clearedCookie.MaxAge >= 0 {
+		t.Fatalf("expected invalid session cookie to be cleared, got %#v", clearedCookie)
 	}
 }
 
@@ -1391,7 +1661,7 @@ func TestGatewayConfiguredSessionSecretSurvivesRestart(t *testing.T) {
 	})
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/login", nil)
+	request := httptest.NewRequest(http.MethodGet, "/elasticgateway/login?next=%2Fs%2Fteam10%2Fapp%2Fhome", nil)
 	request.AddCookie(&http.Cookie{Name: serverpkg.SessionCookieName, Value: encoded, Expires: expiresAt})
 
 	secondGateway.Handler().ServeHTTP(recorder, request)
@@ -1399,7 +1669,7 @@ func TestGatewayConfiguredSessionSecretSurvivesRestart(t *testing.T) {
 	if recorder.Code != http.StatusSeeOther {
 		t.Fatalf("expected status 303, got %d: %s", recorder.Code, recorder.Body.String())
 	}
-	if got := recorder.Header().Get("Location"); got != "/kibana/s/team10/app/home" {
+	if got := recorder.Header().Get("Location"); got != "/s/team10/app/home" {
 		t.Fatalf("expected configured secret to decode restarted session, got redirect %q", got)
 	}
 }
@@ -1422,7 +1692,7 @@ func TestGatewayDifferentSessionSecretRejectsCookie(t *testing.T) {
 	})
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/login", nil)
+	request := httptest.NewRequest(http.MethodGet, "/elasticgateway/login", nil)
 	request.AddCookie(&http.Cookie{Name: serverpkg.SessionCookieName, Value: encoded, Expires: expiresAt})
 
 	secondGateway.Handler().ServeHTTP(recorder, request)
@@ -1441,7 +1711,7 @@ func TestGatewayIngestRequiresAuthentication(t *testing.T) {
 	defer elasticSearch.Close()
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
 	request.Header.Set("Content-Type", "application/json")
 
 	testGatewayHandler(testConfig(elasticSearch)).ServeHTTP(recorder, request)
@@ -1463,7 +1733,7 @@ func TestGatewayIngestRejectsInvalidCredentials(t *testing.T) {
 	defer elasticSearch.Close()
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
 	request.Header.Set("Content-Type", "application/json")
 	request.SetBasicAuth("writer", "wrong")
 
@@ -1485,7 +1755,7 @@ func TestGatewayIngestLDAPFailureReturnsGenericBadGateway(t *testing.T) {
 	defer elasticSearch.Close()
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
 	request.Header.Set("Content-Type", "application/json")
 	request.SetBasicAuth("writer", "secret")
 
@@ -1508,7 +1778,7 @@ func TestGatewayIngestRejectsReadOnlyAccess(t *testing.T) {
 	defer elasticSearch.Close()
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/ingest/team10-hello", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/ingest/team10-hello", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
 	request.Header.Set("Content-Type", "application/json")
 	request.SetBasicAuth("johndoe", "dogood")
 
@@ -1532,7 +1802,7 @@ func TestGatewayIngestRejectsWrongNamespace(t *testing.T) {
 	defer elasticSearch.Close()
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
 	request.Header.Set("Content-Type", "application/json")
 	request.SetBasicAuth("writer", "secret")
 
@@ -1556,7 +1826,7 @@ func TestGatewayIngestRejectsBareNamespace(t *testing.T) {
 	defer elasticSearch.Close()
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/ingest/team10", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/ingest/team10", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
 	request.Header.Set("Content-Type", "application/json")
 	request.SetBasicAuth("writer", "secret")
 
@@ -1607,7 +1877,7 @@ func TestGatewayIngestUsesAuthenticatedSessionAccess(t *testing.T) {
 	})
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/ingest/team10-hello", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello"}`))
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/ingest/team10-hello", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello"}`))
 	request.Header.Set("Content-Type", "application/json")
 	request.AddCookie(&http.Cookie{Name: serverpkg.SessionCookieName, Value: encoded, Expires: expiresAt})
 
@@ -1656,7 +1926,7 @@ func TestGatewayIngestBootstrapsAndIndexes(t *testing.T) {
 	defer elasticSearch.Close()
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/ingest/orders-demo/", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello","count":1}`))
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/ingest/orders-demo/", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello","count":1}`))
 	request.Header.Set("Content-Type", "application/json")
 	addTestIngestBasicAuth(request)
 
@@ -1744,7 +2014,7 @@ func TestGatewayBulkIngestIndexesDocuments(t *testing.T) {
 		``,
 	}, "\n")
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/ingest/orders-demo/_bulk", strings.NewReader(body))
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/ingest/orders-demo/_bulk", strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/x-ndjson")
 	addTestIngestBasicAuth(request)
 
@@ -1842,7 +2112,7 @@ func TestGatewayBulkIngestFailureReturnsGenericBadGateway(t *testing.T) {
 		``,
 	}, "\n")
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/ingest/orders-demo/_bulk", strings.NewReader(body))
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/ingest/orders-demo/_bulk", strings.NewReader(body))
 	request.Header.Set("Content-Type", "application/x-ndjson")
 	addTestIngestBasicAuth(request)
 
@@ -1891,7 +2161,7 @@ func TestGatewayRepeatWriteSkipsBootstrap(t *testing.T) {
 	defer elasticSearch.Close()
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello"}`))
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello"}`))
 	request.Header.Set("Content-Type", "application/json")
 	addTestIngestBasicAuth(request)
 
@@ -2026,16 +2296,16 @@ func TestGatewayValidationErrors(t *testing.T) {
 		body        string
 		wantStatus  int
 	}{
-		{name: "invalid json", method: http.MethodPost, path: "/ingest/orders-demo", contentType: "application/json", body: `{"event_time":`, wantStatus: http.StatusBadRequest},
-		{name: "non object body", method: http.MethodPost, path: "/ingest/orders-demo", contentType: "application/json", body: `[]`, wantStatus: http.StatusBadRequest},
-		{name: "missing event_time", method: http.MethodPost, path: "/ingest/orders-demo", contentType: "application/json", body: `{"message":"hello"}`, wantStatus: http.StatusBadRequest},
-		{name: "non string event_time", method: http.MethodPost, path: "/ingest/orders-demo", contentType: "application/json", body: `{"event_time":123}`, wantStatus: http.StatusBadRequest},
-		{name: "non utc event_time", method: http.MethodPost, path: "/ingest/orders-demo", contentType: "application/json", body: `{"event_time":"2024-12-30T10:11:12+02:00"}`, wantStatus: http.StatusBadRequest},
-		{name: "invalid index", method: http.MethodPost, path: "/ingest/Orders", contentType: "application/json", body: `{"event_time":"2024-12-30T10:11:12Z"}`, wantStatus: http.StatusBadRequest},
-		{name: "extra path segments", method: http.MethodPost, path: "/ingest/orders/extra", contentType: "application/json", body: `{"event_time":"2024-12-30T10:11:12Z"}`, wantStatus: http.StatusBadRequest},
-		{name: "wrong content type", method: http.MethodPost, path: "/ingest/orders-demo", contentType: "text/plain", body: `{"event_time":"2024-12-30T10:11:12Z"}`, wantStatus: http.StatusUnsupportedMediaType},
-		{name: "wrong method", method: http.MethodGet, path: "/ingest/orders-demo", contentType: "application/json", body: ``, wantStatus: http.StatusMethodNotAllowed},
-		{name: "name too long", method: http.MethodPost, path: "/ingest/" + longIndexName, contentType: "application/json", body: `{"event_time":"2024-12-30T10:11:12Z"}`, wantStatus: http.StatusBadRequest},
+		{name: "invalid json", method: http.MethodPost, path: "/elasticgateway/ingest/orders-demo", contentType: "application/json", body: `{"event_time":`, wantStatus: http.StatusBadRequest},
+		{name: "non object body", method: http.MethodPost, path: "/elasticgateway/ingest/orders-demo", contentType: "application/json", body: `[]`, wantStatus: http.StatusBadRequest},
+		{name: "missing event_time", method: http.MethodPost, path: "/elasticgateway/ingest/orders-demo", contentType: "application/json", body: `{"message":"hello"}`, wantStatus: http.StatusBadRequest},
+		{name: "non string event_time", method: http.MethodPost, path: "/elasticgateway/ingest/orders-demo", contentType: "application/json", body: `{"event_time":123}`, wantStatus: http.StatusBadRequest},
+		{name: "non utc event_time", method: http.MethodPost, path: "/elasticgateway/ingest/orders-demo", contentType: "application/json", body: `{"event_time":"2024-12-30T10:11:12+02:00"}`, wantStatus: http.StatusBadRequest},
+		{name: "invalid index", method: http.MethodPost, path: "/elasticgateway/ingest/Orders", contentType: "application/json", body: `{"event_time":"2024-12-30T10:11:12Z"}`, wantStatus: http.StatusBadRequest},
+		{name: "extra path segments", method: http.MethodPost, path: "/elasticgateway/ingest/orders/extra", contentType: "application/json", body: `{"event_time":"2024-12-30T10:11:12Z"}`, wantStatus: http.StatusBadRequest},
+		{name: "wrong content type", method: http.MethodPost, path: "/elasticgateway/ingest/orders-demo", contentType: "text/plain", body: `{"event_time":"2024-12-30T10:11:12Z"}`, wantStatus: http.StatusUnsupportedMediaType},
+		{name: "wrong method", method: http.MethodGet, path: "/elasticgateway/ingest/orders-demo", contentType: "application/json", body: ``, wantStatus: http.StatusMethodNotAllowed},
+		{name: "name too long", method: http.MethodPost, path: "/elasticgateway/ingest/" + longIndexName, contentType: "application/json", body: `{"event_time":"2024-12-30T10:11:12Z"}`, wantStatus: http.StatusBadRequest},
 	}
 
 	gateway := testGatewayHandlerWithAuth(testConfig(elasticSearch), func(username, _ string) (*authzpkg.User, []authzpkg.Access, error) {
@@ -2128,7 +2398,7 @@ func TestGatewayElasticsearchFailuresReturnBadGateway(t *testing.T) {
 			defer elasticSearch.Close()
 
 			recorder := httptest.NewRecorder()
-			request := httptest.NewRequest(http.MethodPost, "/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
+			request := httptest.NewRequest(http.MethodPost, "/elasticgateway/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
 			request.Header.Set("Content-Type", "application/json")
 			addTestIngestBasicAuth(request)
 
@@ -2164,7 +2434,7 @@ func TestGatewaySpaceFailureReturnsBadGateway(t *testing.T) {
 	defer kibana.Close()
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello"}`))
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello"}`))
 	request.Header.Set("Content-Type", "application/json")
 	addTestIngestBasicAuth(request)
 
@@ -2208,7 +2478,7 @@ func TestGatewayDataViewFailureReturnsBadGateway(t *testing.T) {
 	defer kibana.Close()
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello"}`))
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello"}`))
 	request.Header.Set("Content-Type", "application/json")
 	addTestIngestBasicAuth(request)
 
@@ -2277,7 +2547,7 @@ func TestGatewayBootstrapConflictRetriesAliasCheck(t *testing.T) {
 	defer elasticSearch.Close()
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello"}`))
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"hello"}`))
 	request.Header.Set("Content-Type", "application/json")
 	addTestIngestBasicAuth(request)
 

@@ -138,7 +138,7 @@ func TestLDAPIngestUserCanIngestTeam10(t *testing.T) {
 	responses := make([]serverpkg.IngestResponse, 0, 2)
 	messages := []string{"ldap ingest integration", "ldap ingest cached"}
 	for _, message := range messages {
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/ingest/team10-hello", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"`+message+`"}`))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/elasticgateway/ingest/team10-hello", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"`+message+`"}`))
 		if err != nil {
 			t.Fatalf("build ingest request: %v", err)
 		}
@@ -267,7 +267,7 @@ func TestLDAPJohndoeCannotIngestTeam10(t *testing.T) {
 	baseURL, _, stopGateway := startIntegrationGateway(ctx, t, cfg)
 	defer stopGateway()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/ingest/team10-hello", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"should be forbidden"}`))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/elasticgateway/ingest/team10-hello", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"should be forbidden"}`))
 	if err != nil {
 		t.Fatalf("build ingest request: %v", err)
 	}
@@ -499,7 +499,7 @@ func waitForGatewayReady(ctx context.Context, t *testing.T, client *http.Client,
 
 	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/login", nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL+"/elasticgateway/login", nil)
 		if err != nil {
 			t.Fatalf("build readiness request: %v", err)
 		}

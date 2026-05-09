@@ -201,7 +201,7 @@ func TestGatewayIngestBasicAuthUsesLDAPCache(t *testing.T) {
 	handler := gateway.Handler()
 	for i := 0; i < 2; i++ {
 		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodPost, "/ingest/team10-hello", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"cached"}`))
+		request := httptest.NewRequest(http.MethodPost, "/elasticgateway/ingest/team10-hello", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"cached"}`))
 		request.Header.Set("Content-Type", "application/json")
 		request.SetBasicAuth("ingestuser", "dogood")
 
@@ -295,7 +295,7 @@ func TestGatewayLogoutEvictsIngestAuthCache(t *testing.T) {
 	})
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodPost, "/logout", nil)
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/logout", nil)
 	request.AddCookie(&http.Cookie{Name: serverpkg.SessionCookieName, Value: encoded, Expires: expiresAt})
 
 	gateway.Handler().ServeHTTP(recorder, request)
@@ -325,7 +325,7 @@ func TestGatewayIngestBasicAuthDoesNotCacheAuthenticationErrors(t *testing.T) {
 	handler := gateway.Handler()
 	for i := 0; i < 2; i++ {
 		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodPost, "/ingest/team10-hello", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"cached"}`))
+		request := httptest.NewRequest(http.MethodPost, "/elasticgateway/ingest/team10-hello", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z","message":"cached"}`))
 		request.Header.Set("Content-Type", "application/json")
 		request.SetBasicAuth("ingestuser", "wrong")
 

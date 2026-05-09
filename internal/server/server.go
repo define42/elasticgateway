@@ -41,11 +41,17 @@ type Session struct {
 
 const (
 	// SessionCookieName is the cookie that carries the gateway session token.
-	SessionCookieName                    = "elasticgateway_session"
-	kibanaBasePath                       = "/kibana"
-	invalidLoginCredentialsMessage       = "invalid username or password"
-	upstreamErrorMessage                 = "upstream error, see logs"
-	maxIngestRequestBodyBytes      int64 = 512 * 1024 * 1024
+	SessionCookieName              = "elasticgateway_session"
+	gatewayBasePath                = "/elasticgateway"
+	gatewayLoginPath               = gatewayBasePath + "/login"
+	gatewayLogoutPath              = gatewayBasePath + "/logout"
+	gatewayDemoPath                = gatewayBasePath + "/demo"
+	gatewayIngestPath              = gatewayBasePath + "/ingest"
+	gatewayHealthzPath             = gatewayBasePath + "/healthz"
+	gatewayReadyzPath              = gatewayBasePath + "/readyz"
+	invalidLoginCredentialsMessage = "invalid username or password"
+	upstreamErrorMessage           = "upstream error, see logs"
+	maxIngestRequestBodyBytes      = int64(512 * 1024 * 1024)
 )
 
 var (
@@ -73,6 +79,7 @@ type Gateway struct {
 type LoginPageData struct {
 	Error    string
 	Username string
+	Next     string
 }
 
 // IngestResponse is returned to clients after a successful ingest request.
@@ -188,47 +195,44 @@ func (g *Gateway) decodeSessionCookieValue(value string) (Session, error) {
 // Handler builds the HTTP mux for the gateway routes.
 func (g *Gateway) Handler() *http.ServeMux {
 	mux := http.NewServeMux()
+	mux.HandleFunc(gatewayHealthzPath, g.handleHealthz)
+	mux.HandleFunc(gatewayReadyzPath, g.handleReadyz)
+	mux.HandleFunc(gatewayLoginPath, g.handleLogin)
+	mux.HandleFunc(gatewayLogoutPath, g.handleLogout)
+	mux.HandleFunc(gatewayDemoPath, g.handleDemo)
+	mux.HandleFunc(gatewayIngestPath, g.handleIngest)
+	mux.HandleFunc(gatewayIngestPath+"/", g.handleIngest)
+	mux.HandleFunc(gatewayBasePath, g.handleGatewayNotFound)
+	mux.HandleFunc(gatewayBasePath+"/", g.handleGatewayNotFound)
 	mux.HandleFunc("/", g.handleRoot)
-	mux.HandleFunc("/healthz", g.handleHealthz)
-	mux.HandleFunc("/readyz", g.handleReadyz)
-	mux.HandleFunc("/login", g.handleLogin)
-	mux.HandleFunc("/logout", g.handleLogout)
-	mux.HandleFunc(kibanaBasePath, g.HandleKibana)
-	mux.HandleFunc(kibanaBasePath+"/", g.HandleKibana)
-	mux.HandleFunc("/demo", g.handleDemo)
-	mux.HandleFunc("/ingest", g.handleIngest)
-	mux.HandleFunc("/ingest/", g.handleIngest)
 	return mux
 }
 
 func (g *Gateway) handleRoot(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/" {
-		http.NotFound(w, r)
-		return
-	}
+	g.HandleKibana(w, r)
+}
 
-	switch r.Method {
-	case http.MethodGet, http.MethodHead:
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
-	default:
-		w.Header().Set("Allow", http.MethodGet+", "+http.MethodHead)
-		writeErrorJSON(w, http.StatusMethodNotAllowed, "method not allowed")
-	}
+func (g *Gateway) handleGatewayNotFound(w http.ResponseWriter, r *http.Request) {
+	http.NotFound(w, r)
 }
 
 func (g *Gateway) handleLogin(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/login" {
+	if r.URL.Path != gatewayLoginPath {
 		http.NotFound(w, r)
 		return
 	}
 
 	switch r.Method {
 	case http.MethodGet:
-		if sessionData, ok := g.currentSession(r); ok {
-			http.Redirect(w, r, kibanaLandingPath(sessionData.Access), http.StatusSeeOther)
+		next := loginNextFromQuery(r)
+		if _, ok := g.currentSession(r); ok {
+			redirectToLocalPath(w, next, http.StatusSeeOther)
 			return
 		}
-		g.RenderLoginPage(w, http.StatusOK, LoginPageData{})
+		if hasSessionCookie(r) {
+			g.clearSessionCookie(w, r)
+		}
+		g.RenderLoginPage(w, http.StatusOK, LoginPageData{Next: next})
 	case http.MethodPost:
 		g.handleLoginSubmit(w, r)
 	default:
@@ -238,7 +242,7 @@ func (g *Gateway) handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (g *Gateway) handleLogout(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/logout" {
+	if r.URL.Path != gatewayLogoutPath {
 		http.NotFound(w, r)
 		return
 	}
@@ -258,12 +262,12 @@ func (g *Gateway) handleLogout(w http.ResponseWriter, r *http.Request) {
 	g.logLogout(r, sessionData, sessionOK)
 
 	g.clearSessionCookie(w, r)
-	http.Redirect(w, r, "/login", http.StatusSeeOther)
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 // HandleKibana proxies authenticated requests to Kibana.
 func (g *Gateway) HandleKibana(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != kibanaBasePath && !strings.HasPrefix(r.URL.Path, kibanaBasePath+"/") {
+	if isGatewayPath(r.URL.Path) {
 		http.NotFound(w, r)
 		return
 	}
@@ -275,8 +279,14 @@ func (g *Gateway) HandleKibana(w http.ResponseWriter, r *http.Request) {
 
 	sessionData, ok := g.currentSession(r)
 	if !ok {
-		g.clearSessionCookie(w, r)
-		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		if hasSessionCookie(r) {
+			g.clearSessionCookie(w, r)
+		}
+		if r.Method == http.MethodGet || r.Method == http.MethodHead {
+			g.RenderLoginPage(w, http.StatusOK, LoginPageData{Next: loginNextForRequest(r)})
+			return
+		}
+		writeErrorJSON(w, http.StatusUnauthorized, "gateway login required")
 		return
 	}
 
@@ -299,25 +309,102 @@ func (g *Gateway) handleKibanaLogout(w http.ResponseWriter, r *http.Request) {
 	g.logLogout(r, sessionData, sessionOK)
 
 	g.clearSessionCookie(w, r)
-	http.Redirect(w, r, "/login", http.StatusSeeOther)
+	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 
 func isKibanaLogoutPath(path string) bool {
 	path = strings.TrimSuffix(path, "/")
 	switch path {
-	case kibanaBasePath + "/auth/logout", kibanaBasePath + "/logout", kibanaBasePath + "/api/security/logout", kibanaBasePath + "/security/logout":
+	case "/auth/logout", "/logout", "/api/security/logout", "/security/logout":
 		return true
 	default:
-		return strings.HasPrefix(path, kibanaBasePath+"/s/") &&
-			(strings.HasSuffix(path, "/auth/logout") ||
-				strings.HasSuffix(path, "/logout") ||
-				strings.HasSuffix(path, "/api/security/logout") ||
-				strings.HasSuffix(path, "/security/logout"))
+		if !strings.HasPrefix(path, "/s/") {
+			return false
+		}
+		spacePath := strings.TrimPrefix(path, "/s/")
+		_, rest, ok := strings.Cut(spacePath, "/")
+		if !ok {
+			return false
+		}
+		return rest == "auth/logout" ||
+			rest == "logout" ||
+			rest == "api/security/logout" ||
+			rest == "security/logout" ||
+			strings.HasSuffix(rest, "/auth/logout") ||
+			strings.HasSuffix(rest, "/logout") ||
+			strings.HasSuffix(rest, "/api/security/logout") ||
+			strings.HasSuffix(rest, "/security/logout")
 	}
 }
 
+func isGatewayPath(path string) bool {
+	return path == gatewayBasePath || strings.HasPrefix(path, gatewayBasePath+"/")
+}
+
+func loginNextForRequest(r *http.Request) string {
+	if r == nil || r.URL == nil {
+		return "/"
+	}
+	return sanitizeLoginNext(r.URL.RequestURI())
+}
+
+func loginNextFromQuery(r *http.Request) string {
+	if r == nil || r.URL == nil {
+		return "/"
+	}
+	return sanitizeLoginNext(r.URL.Query().Get("next"))
+}
+
+func sanitizeLoginNext(next string) string {
+	next = strings.TrimSpace(next)
+	if next == "" || !strings.HasPrefix(next, "/") || strings.HasPrefix(next, "//") || strings.Contains(next, "\\") || hasControlCharacter(next) {
+		return "/"
+	}
+
+	parsed, err := url.Parse(next)
+	if err != nil || parsed.IsAbs() || parsed.Host != "" || parsed.Path == "" || isGatewayPath(parsed.Path) {
+		return "/"
+	}
+	if parsed.Path[0] != '/' {
+		return "/"
+	}
+	return parsed.RequestURI()
+}
+
+func redirectToLocalPath(w http.ResponseWriter, next string, status int) {
+	w.Header().Set("Location", sanitizeLoginNext(next))
+	w.WriteHeader(status)
+}
+
+func hasControlCharacter(value string) bool {
+	for _, r := range value {
+		if r < 0x20 || r == 0x7f {
+			return true
+		}
+	}
+	return false
+}
+
+func hasSessionCookie(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	_, err := r.Cookie(SessionCookieName)
+	return err == nil
+}
+
+func gatewayIngestRequestPath(path string) string {
+	if path == gatewayIngestPath {
+		return "/ingest"
+	}
+	if strings.HasPrefix(path, gatewayIngestPath+"/") {
+		return "/ingest" + strings.TrimPrefix(path, gatewayIngestPath)
+	}
+	return path
+}
+
 func (g *Gateway) handleDemo(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/demo" {
+	if r.URL.Path != gatewayDemoPath {
 		http.NotFound(w, r)
 		return
 	}
@@ -334,15 +421,16 @@ func (g *Gateway) handleDemo(w http.ResponseWriter, r *http.Request) {
 func (g *Gateway) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
 		g.logLoginFailure(r, "", http.StatusBadRequest, "invalid_form", err)
-		g.RenderLoginPage(w, http.StatusBadRequest, LoginPageData{Error: "failed to read login form"})
+		g.RenderLoginPage(w, http.StatusBadRequest, LoginPageData{Error: "failed to read login form", Next: "/"})
 		return
 	}
 
+	next := sanitizeLoginNext(r.Form.Get("next"))
 	username := strings.TrimSpace(r.Form.Get("username"))
 	password := r.Form.Get("password")
 	if username == "" || password == "" {
 		g.logLoginFailure(r, username, http.StatusUnauthorized, "missing_credentials", nil)
-		g.renderLoginError(w, http.StatusUnauthorized, "username and password are required", username)
+		g.renderLoginError(w, http.StatusUnauthorized, "username and password are required", username, next)
 		return
 	}
 
@@ -350,7 +438,7 @@ func (g *Gateway) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		status, message := loginErrorResponse(err)
 		g.logLoginFailure(r, username, status, loginFailureReason(err), err)
-		g.renderLoginError(w, status, message, username)
+		g.renderLoginError(w, status, message, username, next)
 		return
 	}
 
@@ -364,7 +452,7 @@ func (g *Gateway) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 			message = "this account cannot be used for gateway login"
 		}
 		g.logLoginFailure(r, username, status, provisionLoginFailureReason(err), err)
-		g.renderLoginError(w, status, message, username)
+		g.renderLoginError(w, status, message, username, next)
 		return
 	}
 
@@ -377,23 +465,25 @@ func (g *Gateway) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	g.logLoginSuccess(r, username, user, access)
-	http.Redirect(w, r, kibanaLandingPath(access), http.StatusSeeOther)
+	redirectToLocalPath(w, next, http.StatusSeeOther)
 }
 
-func (g *Gateway) renderLoginError(w http.ResponseWriter, status int, message, username string) {
+func (g *Gateway) renderLoginError(w http.ResponseWriter, status int, message, username, next string) {
 	g.RenderLoginPage(w, status, LoginPageData{
 		Error:    message,
 		Username: username,
+		Next:     next,
 	})
 }
 
 func (g *Gateway) handleIngest(w http.ResponseWriter, r *http.Request) {
-	if isBulkIngestPath(r.URL.Path) {
-		g.handleBulkIngest(w, r)
+	ingestPath := gatewayIngestRequestPath(r.URL.Path)
+	if isBulkIngestPath(ingestPath) {
+		g.handleBulkIngest(w, r, ingestPath)
 		return
 	}
 
-	indexName, err := ingest.ParsePath(r.URL.Path)
+	indexName, err := ingest.ParsePath(ingestPath)
 	if err != nil {
 		writeIngestPathError(w, r, err)
 		return
@@ -442,8 +532,8 @@ func (g *Gateway) handleIngest(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (g *Gateway) handleBulkIngest(w http.ResponseWriter, r *http.Request) {
-	indexName, err := ingest.ParseBulkPath(r.URL.Path)
+func (g *Gateway) handleBulkIngest(w http.ResponseWriter, r *http.Request, ingestPath string) {
+	indexName, err := ingest.ParseBulkPath(ingestPath)
 	if err != nil {
 		writeIngestPathError(w, r, err)
 		return
@@ -975,14 +1065,6 @@ func forwardedProto(r *http.Request, forceSecure bool) string {
 		return "https"
 	}
 	return "http"
-}
-
-func kibanaLandingPath(access []authz.Access) string {
-	effective := authz.NormalizeAccessByNamespace(access)
-	if len(effective) == 0 || strings.TrimSpace(effective[0].Namespace) == "" {
-		return kibanaBasePath + "/app/home"
-	}
-	return kibanaBasePath + "/s/" + url.PathEscape(effective[0].Namespace) + "/app/home"
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

@@ -81,8 +81,8 @@ func TestGatewayRootAndDemoCoverage(t *testing.T) {
 		request := httptest.NewRequest(http.MethodHead, "/", nil)
 		gateway.ServeHTTP(recorder, request)
 
-		if recorder.Code != http.StatusSeeOther {
-			t.Fatalf("expected status 303, got %d", recorder.Code)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("expected status 200, got %d", recorder.Code)
 		}
 	})
 
@@ -91,27 +91,24 @@ func TestGatewayRootAndDemoCoverage(t *testing.T) {
 		request := httptest.NewRequest(http.MethodPost, "/", nil)
 		gateway.ServeHTTP(recorder, request)
 
-		if recorder.Code != http.StatusMethodNotAllowed {
-			t.Fatalf("expected status 405, got %d", recorder.Code)
-		}
-		if got := recorder.Header().Get("Allow"); got != http.MethodGet+", "+http.MethodHead {
-			t.Fatalf("unexpected Allow header: %q", got)
+		if recorder.Code != http.StatusUnauthorized {
+			t.Fatalf("expected status 401, got %d", recorder.Code)
 		}
 	})
 
-	t.Run("root not found", func(t *testing.T) {
+	t.Run("root path renders login", func(t *testing.T) {
 		recorder := httptest.NewRecorder()
 		request := httptest.NewRequest(http.MethodGet, "/nope", nil)
 		gateway.ServeHTTP(recorder, request)
 
-		if recorder.Code != http.StatusNotFound {
-			t.Fatalf("expected status 404, got %d", recorder.Code)
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("expected status 200, got %d", recorder.Code)
 		}
 	})
 
 	t.Run("demo path not found", func(t *testing.T) {
 		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodGet, "/demo/nope", nil)
+		request := httptest.NewRequest(http.MethodGet, "/elasticgateway/demo/nope", nil)
 		rawGateway.Handler().ServeHTTP(recorder, request)
 
 		if recorder.Code != http.StatusNotFound {
@@ -121,7 +118,7 @@ func TestGatewayRootAndDemoCoverage(t *testing.T) {
 
 	t.Run("login path not found", func(t *testing.T) {
 		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodGet, "/login/nope", nil)
+		request := httptest.NewRequest(http.MethodGet, "/elasticgateway/login/nope", nil)
 		rawGateway.Handler().ServeHTTP(recorder, request)
 
 		if recorder.Code != http.StatusNotFound {
@@ -136,7 +133,7 @@ func TestGatewayLogoutCoverage(t *testing.T) {
 
 	t.Run("logout wrong method", func(t *testing.T) {
 		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodGet, "/logout", nil)
+		request := httptest.NewRequest(http.MethodGet, "/elasticgateway/logout", nil)
 		gateway.ServeHTTP(recorder, request)
 
 		if recorder.Code != http.StatusMethodNotAllowed {
@@ -149,21 +146,21 @@ func TestGatewayLogoutCoverage(t *testing.T) {
 
 	t.Run("logout dangling cookie still redirects", func(t *testing.T) {
 		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodPost, "/logout", nil)
+		request := httptest.NewRequest(http.MethodPost, "/elasticgateway/logout", nil)
 		request.AddCookie(&http.Cookie{Name: serverpkg.SessionCookieName, Value: "dangling"})
 		gateway.ServeHTTP(recorder, request)
 
 		if recorder.Code != http.StatusSeeOther {
 			t.Fatalf("expected status 303, got %d", recorder.Code)
 		}
-		if got := recorder.Header().Get("Location"); got != "/login" {
+		if got := recorder.Header().Get("Location"); got != "/" {
 			t.Fatalf("unexpected redirect: %q", got)
 		}
 	})
 
 	t.Run("logout path not found", func(t *testing.T) {
 		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodPost, "/logout/nope", nil)
+		request := httptest.NewRequest(http.MethodPost, "/elasticgateway/logout/nope", nil)
 		rawGateway.Handler().ServeHTTP(recorder, request)
 
 		if recorder.Code != http.StatusNotFound {
@@ -173,10 +170,10 @@ func TestGatewayLogoutCoverage(t *testing.T) {
 }
 
 func TestGatewayKibanaCoverage(t *testing.T) {
-	t.Run("path not found", func(t *testing.T) {
+	t.Run("gateway path not proxied", func(t *testing.T) {
 		gateway := newTestGateway(elasticpkg.NewClient(appconfig.Config{}), nil)
 		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodGet, "/kibana-nope", nil)
+		request := httptest.NewRequest(http.MethodGet, "/elasticgateway/nope", nil)
 		gateway.HandleKibana(recorder, request)
 
 		if recorder.Code != http.StatusNotFound {
@@ -207,7 +204,7 @@ func TestHandleLoginSubmitCoverage(t *testing.T) {
 	t.Run("parse form failure", func(t *testing.T) {
 		gateway := testGatewayHandler(appconfig.Config{})
 		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodPost, "/login", io.NopCloser(errorReader{err: errors.New("read failed")}))
+		request := httptest.NewRequest(http.MethodPost, "/elasticgateway/login", io.NopCloser(errorReader{err: errors.New("read failed")}))
 		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 		gateway.ServeHTTP(recorder, request)

@@ -160,7 +160,8 @@
       <p>Sign in with your LDAP username and password. The gateway validates the credentials, provisions your Elasticsearch account, and then opens Kibana through the gateway proxy.</p>
     </section>
 
-    <form method="post" action="/login">
+    <form method="post" action="/elasticgateway/login">
+      <input type="hidden" name="next" value="{{.Next}}">
       {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
 
       <label for="username">Username</label>
@@ -173,7 +174,7 @@
 
       <div class="links">
         <span class="hint">Kibana is proxied through this gateway after sign-in.</span>
-        <a href="/demo">Open demo page</a>
+        <a href="/elasticgateway/demo">Open demo page</a>
       </div>
     </form>
   </main>

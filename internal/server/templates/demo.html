@@ -235,7 +235,7 @@
       }
 
       statusText.textContent = "Sending request...";
-      result.textContent = "Submitting to /ingest/" + indexName;
+      result.textContent = "Submitting to /elasticgateway/ingest/" + indexName;
 
       const headers = {
         "Content-Type": "application/json"
@@ -245,7 +245,7 @@
       }
 
       try {
-        const response = await fetch("/ingest/" + encodeURIComponent(indexName), {
+        const response = await fetch("/elasticgateway/ingest/" + encodeURIComponent(indexName), {
           method: "POST",
           credentials: "same-origin",
           headers,
