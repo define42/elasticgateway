@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -70,6 +71,86 @@ func TestKibanaProxyForceSecureCookiesForwardsHTTPS(t *testing.T) {
 	}
 	if forwardedProto != "https" {
 		t.Fatalf("expected forced X-Forwarded-Proto https, got %q", forwardedProto)
+	}
+}
+
+func TestHealthAndReadyzProbeElasticsearchAndKibana(t *testing.T) {
+	var calls []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.Path)
+		switch r.Method + " " + r.URL.Path {
+		case "GET /", "GET /api/status":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
+		default:
+			t.Fatalf("unexpected probe request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer upstream.Close()
+
+	gateway := New(elasticpkg.NewClient(appconfig.Config{
+		ElasticsearchURL: upstream.URL,
+		KibanaURL:        upstream.URL,
+		HTTPClient:       upstream.Client(),
+	}), nil)
+
+	for _, path := range []string{"/healthz", "/readyz"} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+
+		gateway.Handler().ServeHTTP(recorder, request)
+
+		if recorder.Code != http.StatusOK {
+			t.Fatalf("%s: expected status 200, got %d: %s", path, recorder.Code, recorder.Body.String())
+		}
+		var response probeResponse
+		if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+			t.Fatalf("%s: decode probe response: %v", path, err)
+		}
+		if response.Checks["elasticsearch"].Status != "ok" || response.Checks["kibana"].Status != "ok" {
+			t.Fatalf("%s: unexpected probe response: %#v", path, response)
+		}
+	}
+
+	expected := []string{"GET /", "GET /api/status", "GET /", "GET /api/status"}
+	if strings.Join(calls, ",") != strings.Join(expected, ",") {
+		t.Fatalf("unexpected probe calls: %#v", calls)
+	}
+}
+
+func TestReadyzReturnsUnavailableWhenKibanaPingFails(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
+		case "GET /api/status":
+			http.Error(w, "kibana unavailable", http.StatusServiceUnavailable)
+		default:
+			t.Fatalf("unexpected probe request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer upstream.Close()
+
+	gateway := New(elasticpkg.NewClient(appconfig.Config{
+		ElasticsearchURL: upstream.URL,
+		KibanaURL:        upstream.URL,
+		HTTPClient:       upstream.Client(),
+	}), nil)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+
+	gateway.Handler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status 503, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var response probeResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatalf("decode probe response: %v", err)
+	}
+	if response.Status != "not_ready" || response.Checks["kibana"].Status != "error" {
+		t.Fatalf("unexpected probe response: %#v", response)
 	}
 }
 

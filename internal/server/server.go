@@ -152,6 +152,8 @@ func (g *Gateway) decodeSessionCookieValue(value string) (Session, error) {
 func (g *Gateway) Handler() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", g.handleRoot)
+	mux.HandleFunc("/healthz", g.handleHealthz)
+	mux.HandleFunc("/readyz", g.handleReadyz)
 	mux.HandleFunc("/login", g.handleLogin)
 	mux.HandleFunc("/logout", g.handleLogout)
 	mux.HandleFunc(kibanaBasePath, g.HandleKibana)
