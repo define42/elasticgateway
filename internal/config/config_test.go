@@ -16,6 +16,8 @@ import (
 	"time"
 )
 
+const testSessionSecret = "test-session-secret-with-enough-length"
+
 func TestDefaultHTTPClient(t *testing.T) {
 	t.Setenv("ELASTICSEARCH_SKIP_TLS_VERIFY", "true")
 
@@ -34,14 +36,38 @@ func TestDefaultHTTPClient(t *testing.T) {
 }
 
 func TestLoadGatewayReadsSessionSecret(t *testing.T) {
-	t.Setenv("SESSION_SECRET", "shared-session-secret-for-tests")
+	t.Setenv("SESSION_SECRET", "shared-session-secret-for-tests-long")
 
 	cfg, err := LoadGateway()
 	if err != nil {
 		t.Fatalf("LoadGateway: %v", err)
 	}
-	if cfg.SessionSecret != "shared-session-secret-for-tests" {
+	if cfg.SessionSecret != "shared-session-secret-for-tests-long" {
 		t.Fatalf("unexpected session secret: %q", cfg.SessionSecret)
+	}
+}
+
+func TestLoadGatewayRequiresSessionSecret(t *testing.T) {
+	t.Setenv("SESSION_SECRET", "")
+
+	_, err := LoadGateway()
+	if err == nil {
+		t.Fatal("expected missing SESSION_SECRET error")
+	}
+	if !strings.Contains(err.Error(), "SESSION_SECRET") || !strings.Contains(err.Error(), "required") {
+		t.Fatalf("expected useful SESSION_SECRET required error, got %v", err)
+	}
+}
+
+func TestLoadGatewayRejectsShortSessionSecret(t *testing.T) {
+	t.Setenv("SESSION_SECRET", strings.Repeat("x", MinSessionSecretLength-1))
+
+	_, err := LoadGateway()
+	if err == nil {
+		t.Fatal("expected short SESSION_SECRET error")
+	}
+	if !strings.Contains(err.Error(), "SESSION_SECRET") || !strings.Contains(err.Error(), "at least 32") {
+		t.Fatalf("expected useful SESSION_SECRET length error, got %v", err)
 	}
 }
 
@@ -49,7 +75,7 @@ func TestLoadGatewayReadsSessionTTL(t *testing.T) {
 	t.Run("duration", func(t *testing.T) {
 		t.Setenv("SESSION_TTL", "2h30m")
 
-		cfg, err := LoadGateway()
+		cfg, err := loadGatewayForTest(t)
 		if err != nil {
 			t.Fatalf("LoadGateway: %v", err)
 		}
@@ -61,7 +87,7 @@ func TestLoadGatewayReadsSessionTTL(t *testing.T) {
 	t.Run("seconds", func(t *testing.T) {
 		t.Setenv("SESSION_TTL", "3600")
 
-		cfg, err := LoadGateway()
+		cfg, err := loadGatewayForTest(t)
 		if err != nil {
 			t.Fatalf("LoadGateway: %v", err)
 		}
@@ -74,7 +100,7 @@ func TestLoadGatewayReadsSessionTTL(t *testing.T) {
 func TestLoadGatewayReadsForceSecureCookies(t *testing.T) {
 	t.Setenv("FORCE_SECURE_COOKIES", "true")
 
-	cfg, err := LoadGateway()
+	cfg, err := loadGatewayForTest(t)
 	if err != nil {
 		t.Fatalf("LoadGateway: %v", err)
 	}
@@ -84,7 +110,7 @@ func TestLoadGatewayReadsForceSecureCookies(t *testing.T) {
 }
 
 func TestLoadGatewayTrustedProxiesDefaultDisabled(t *testing.T) {
-	cfg, err := LoadGateway()
+	cfg, err := loadGatewayForTest(t)
 	if err != nil {
 		t.Fatalf("LoadGateway: %v", err)
 	}
@@ -96,7 +122,7 @@ func TestLoadGatewayTrustedProxiesDefaultDisabled(t *testing.T) {
 func TestLoadGatewayReadsTrustedProxies(t *testing.T) {
 	t.Setenv("TRUSTED_PROXIES", "10.0.0.0/8, 192.0.2.10 2001:db8::/32")
 
-	cfg, err := LoadGateway()
+	cfg, err := loadGatewayForTest(t)
 	if err != nil {
 		t.Fatalf("LoadGateway: %v", err)
 	}
@@ -114,7 +140,7 @@ func TestLoadGatewayReadsTrustedProxies(t *testing.T) {
 func TestLoadGatewayInvalidTrustedProxiesReturnsError(t *testing.T) {
 	t.Setenv("TRUSTED_PROXIES", "10.0.0.0/8, nope")
 
-	_, err := LoadGateway()
+	_, err := loadGatewayForTest(t)
 	if err == nil {
 		t.Fatal("expected invalid TRUSTED_PROXIES error")
 	}
@@ -126,7 +152,7 @@ func TestLoadGatewayInvalidTrustedProxiesReturnsError(t *testing.T) {
 func TestLoadGatewayUsesPEMRootCA(t *testing.T) {
 	t.Setenv("ROOT_CA", writeRootCAPEMFile(t))
 
-	cfg, err := LoadGateway()
+	cfg, err := loadGatewayForTest(t)
 	if err != nil {
 		t.Fatalf("LoadGateway: %v", err)
 	}
@@ -143,7 +169,7 @@ func TestLoadGatewayUsesPEMRootCA(t *testing.T) {
 func TestLoadGatewayUsesDERRootCA(t *testing.T) {
 	t.Setenv("ROOT_CA", writeRootCADERFile(t))
 
-	cfg, err := LoadGateway()
+	cfg, err := loadGatewayForTest(t)
 	if err != nil {
 		t.Fatalf("LoadGateway: %v", err)
 	}
@@ -164,7 +190,7 @@ func TestLoadGatewayInvalidRootCAReturnsError(t *testing.T) {
 	}
 	t.Setenv("ROOT_CA", path)
 
-	_, err := LoadGateway()
+	_, err := loadGatewayForTest(t)
 	if err == nil {
 		t.Fatal("expected invalid ROOT_CA error")
 	}
@@ -177,7 +203,7 @@ func TestLoadGatewaySkipTLSVerifyWinsOverRootCA(t *testing.T) {
 	t.Setenv("ELASTICSEARCH_SKIP_TLS_VERIFY", "true")
 	t.Setenv("ROOT_CA", filepath.Join(t.TempDir(), "missing-ca.pem"))
 
-	cfg, err := LoadGateway()
+	cfg, err := loadGatewayForTest(t)
 	if err != nil {
 		t.Fatalf("LoadGateway should not read ROOT_CA when skip verify is enabled: %v", err)
 	}
@@ -242,6 +268,13 @@ func TestLoadLDAPAllowsExplicitSkipTLSVerify(t *testing.T) {
 	if !cfg.SkipTLSVerify {
 		t.Fatal("expected LDAP_SKIP_TLS_VERIFY=true to disable verification")
 	}
+}
+
+func loadGatewayForTest(t *testing.T) (Config, error) {
+	t.Helper()
+
+	t.Setenv("SESSION_SECRET", testSessionSecret)
+	return LoadGateway()
 }
 
 func writeRootCAPEMFile(t *testing.T) string {

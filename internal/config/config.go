@@ -26,6 +26,8 @@ const (
 	DefaultUsername = "elastic"
 	// DefaultSessionTTL is the default gateway session lifetime.
 	DefaultSessionTTL = 24 * time.Hour
+	// MinSessionSecretLength is the minimum accepted SESSION_SECRET length.
+	MinSessionSecretLength = 32
 )
 
 // Config contains runtime settings for Elasticsearch, Kibana, and HTTP serving.
@@ -91,6 +93,10 @@ func defaultHTTPClient() (*http.Client, error) {
 
 // LoadGateway loads gateway configuration from the environment.
 func LoadGateway() (Config, error) {
+	sessionSecret, err := loadSessionSecret()
+	if err != nil {
+		return Config{}, err
+	}
 	defaultPassword := getEnv("ELASTIC_PASSWORD", "")
 	httpClient, err := defaultHTTPClient()
 	if err != nil {
@@ -108,7 +114,7 @@ func LoadGateway() (Config, error) {
 		KibanaURL:             getEnv("KIBANA_URL", DefaultKibanaURL),
 		KibanaUsername:        getEnv("KIBANA_USERNAME", getEnv("ELASTICSEARCH_USERNAME", DefaultUsername)),
 		KibanaPassword:        getEnv("KIBANA_PASSWORD", getEnv("ELASTICSEARCH_PASSWORD", defaultPassword)),
-		SessionSecret:         getEnv("SESSION_SECRET", ""),
+		SessionSecret:         sessionSecret,
 		SessionTTL:            getEnvDuration("SESSION_TTL", DefaultSessionTTL),
 		ForceSecureCookies:    getEnvBool("FORCE_SECURE_COOKIES", false),
 		TrustedProxies:        trustedProxies,
@@ -117,6 +123,17 @@ func LoadGateway() (Config, error) {
 		Replicas:              1,
 		HTTPClient:            httpClient,
 	}, nil
+}
+
+func loadSessionSecret() (string, error) {
+	value := strings.TrimSpace(os.Getenv("SESSION_SECRET"))
+	if value == "" {
+		return "", fmt.Errorf("SESSION_SECRET is required and must be at least %d characters", MinSessionSecretLength)
+	}
+	if len(value) < MinSessionSecretLength {
+		return "", fmt.Errorf("SESSION_SECRET must be at least %d characters, got %d", MinSessionSecretLength, len(value))
+	}
+	return value, nil
 }
 
 // LoadLDAP loads LDAP configuration from the environment.
