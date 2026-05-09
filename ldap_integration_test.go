@@ -457,10 +457,7 @@ func startIntegrationGateway(ctx context.Context, t *testing.T, cfg appconfig.Co
 	errCh := make(chan error, 1)
 
 	go func() {
-		srv := &http.Server{
-			Handler:           gateway.Handler(),
-			ReadHeaderTimeout: 5 * time.Second,
-		}
+		srv := newHTTPServer("", gateway.Handler())
 
 		go func() {
 			<-runCtx.Done()

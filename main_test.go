@@ -21,6 +21,32 @@ import (
 	serverpkg "github.com/define42/elasticgateway/internal/server"
 )
 
+func TestNewHTTPServerConfiguresTimeouts(t *testing.T) {
+	t.Parallel()
+
+	handler := http.NewServeMux()
+	srv := newHTTPServer(":9090", handler)
+
+	if srv.Addr != ":9090" {
+		t.Fatalf("unexpected server address: %q", srv.Addr)
+	}
+	if srv.Handler != handler {
+		t.Fatal("expected configured handler")
+	}
+	if srv.ReadHeaderTimeout != httpReadHeaderTimeout {
+		t.Fatalf("unexpected ReadHeaderTimeout: %v", srv.ReadHeaderTimeout)
+	}
+	if srv.ReadTimeout != httpReadTimeout {
+		t.Fatalf("unexpected ReadTimeout: %v", srv.ReadTimeout)
+	}
+	if srv.WriteTimeout != httpWriteTimeout {
+		t.Fatalf("unexpected WriteTimeout: %v", srv.WriteTimeout)
+	}
+	if srv.IdleTimeout != httpIdleTimeout {
+		t.Fatalf("unexpected IdleTimeout: %v", srv.IdleTimeout)
+	}
+}
+
 //nolint:gocognit,funlen // Bootstrap test keeps policy/template request assertions together.
 func TestRunBootstrapsBeforeServe(t *testing.T) {
 	t.Parallel()

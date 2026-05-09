@@ -18,6 +18,13 @@ import (
 	"github.com/define42/elasticgateway/internal/server"
 )
 
+const (
+	httpReadHeaderTimeout = 5 * time.Second
+	httpReadTimeout       = 10 * time.Minute
+	httpWriteTimeout      = 10 * time.Minute
+	httpIdleTimeout       = 2 * time.Minute
+)
+
 func main() {
 	configureLogger()
 
@@ -29,11 +36,7 @@ func main() {
 		fatal(err)
 	}
 	if err := run(ctx, cfg, func(handler http.Handler) error {
-		srv := &http.Server{
-			Addr:              cfg.ListenAddr,
-			Handler:           handler,
-			ReadHeaderTimeout: 5 * time.Second,
-		}
+		srv := newHTTPServer(cfg.ListenAddr, handler)
 
 		go func() {
 			<-ctx.Done()
@@ -49,6 +52,17 @@ func main() {
 		return err
 	}); err != nil {
 		fatal(err)
+	}
+}
+
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: httpReadHeaderTimeout,
+		ReadTimeout:       httpReadTimeout,
+		WriteTimeout:      httpWriteTimeout,
+		IdleTimeout:       httpIdleTimeout,
 	}
 }
 
