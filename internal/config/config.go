@@ -129,7 +129,7 @@ func LoadLDAP() LDAPConfig {
 		GroupNamePrefix: getEnvAllowEmpty("LDAP_GROUP_PREFIX", "app_elk_"),
 		UserMailDomain:  getEnv("LDAP_USER_DOMAIN", "@example.com"),
 		StartTLS:        getEnvBool("LDAP_STARTTLS", false),
-		SkipTLSVerify:   getEnvBool("LDAP_SKIP_TLS_VERIFY", true),
+		SkipTLSVerify:   getEnvBool("LDAP_SKIP_TLS_VERIFY", false),
 		RootCAPath:      getEnv("ROOT_CA", ""),
 	}
 }

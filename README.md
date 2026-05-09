@@ -138,11 +138,11 @@ Configuration is environment based.
 | `LDAP_GROUP_PREFIX` | `app_elk_` | Prefix required for gateway-managed groups; stripped before deriving the namespace. Set empty to accept all groups |
 | `LDAP_USER_DOMAIN` | `@example.com` | Domain appended to usernames without `@` before LDAP bind/search |
 | `LDAP_STARTTLS` | `false` | Start TLS after connecting to `ldap://` URLs |
-| `LDAP_SKIP_TLS_VERIFY` | `true` | Disable LDAP TLS verification |
+| `LDAP_SKIP_TLS_VERIFY` | `false` | Disable LDAP TLS verification |
 
 Production notes:
 
-- Set `LDAP_SKIP_TLS_VERIFY=false` with trusted LDAP certificates.
+- Leave `LDAP_SKIP_TLS_VERIFY=false` outside local self-signed development, and provide trusted LDAP certificates or `ROOT_CA`.
 - Set `ELASTICSEARCH_SKIP_TLS_VERIFY=false` outside local self-signed development.
 - Mount a PEM or DER root CA certificate and set `ROOT_CA=/path/to/ca.pem` when Elasticsearch, Kibana, or LDAP use a private certificate authority. `ELASTICSEARCH_SKIP_TLS_VERIFY=true` disables verification for the shared Elasticsearch/Kibana HTTP client, and `LDAP_SKIP_TLS_VERIFY=true` disables verification for LDAP even when `ROOT_CA` is set.
 - Run the gateway behind HTTPS. If TLS terminates before the gateway, set `FORCE_SECURE_COOKIES=true` so session cookies are still sent with the `Secure` flag.

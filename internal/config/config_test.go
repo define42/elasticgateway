@@ -228,6 +228,22 @@ func TestLoadLDAPReadsRootCA(t *testing.T) {
 	}
 }
 
+func TestLoadLDAPVerifiesTLSByDefault(t *testing.T) {
+	cfg := LoadLDAP()
+	if cfg.SkipTLSVerify {
+		t.Fatal("expected LDAP TLS verification by default")
+	}
+}
+
+func TestLoadLDAPAllowsExplicitSkipTLSVerify(t *testing.T) {
+	t.Setenv("LDAP_SKIP_TLS_VERIFY", "true")
+
+	cfg := LoadLDAP()
+	if !cfg.SkipTLSVerify {
+		t.Fatal("expected LDAP_SKIP_TLS_VERIFY=true to disable verification")
+	}
+}
+
 func writeRootCAPEMFile(t *testing.T) string {
 	t.Helper()
 
