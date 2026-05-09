@@ -44,6 +44,7 @@ const (
 	SessionCookieName                    = "elasticgateway_session"
 	kibanaBasePath                       = "/kibana"
 	invalidLoginCredentialsMessage       = "invalid username or password"
+	upstreamErrorMessage                 = "upstream error, see logs"
 	maxIngestRequestBodyBytes      int64 = 512 * 1024 * 1024
 )
 
@@ -280,7 +281,7 @@ func (g *Gateway) HandleKibana(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := g.proxyKibana(w, r, sessionData); err != nil {
-		writeErrorJSON(w, http.StatusBadGateway, fmt.Sprintf("Kibana proxy failed: %v", err))
+		g.writeUpstreamErrorJSON(w, r, http.StatusBadGateway, "kibana_proxy", err)
 	}
 }
 
@@ -406,7 +407,7 @@ func (g *Gateway) handleIngest(w http.ResponseWriter, r *http.Request) {
 
 	spaceName, err := g.authorizeIngestRequest(r, indexName)
 	if err != nil {
-		writeIngestAuthError(w, err)
+		g.writeIngestAuthError(w, r, err)
 		return
 	}
 
@@ -417,19 +418,19 @@ func (g *Gateway) handleIngest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := g.Client.EnsureKibanaDataView(r.Context(), spaceName, indexName); err != nil {
-		writeErrorJSON(w, http.StatusBadGateway, fmt.Sprintf("Kibana setup failed: %v", err))
+		g.writeUpstreamErrorJSON(w, r, http.StatusBadGateway, "kibana_setup", err)
 		return
 	}
 
 	bootstrapped, err := g.Client.EnsureWriteAlias(r.Context(), writeAlias)
 	if err != nil {
-		writeErrorJSON(w, http.StatusBadGateway, fmt.Sprintf("Elasticsearch bootstrap failed: %v", err))
+		g.writeUpstreamErrorJSON(w, r, http.StatusBadGateway, "elasticsearch_bootstrap", err)
 		return
 	}
 
 	indexed, err := g.Client.IndexDocument(r.Context(), writeAlias, document)
 	if err != nil {
-		writeErrorJSON(w, http.StatusBadGateway, fmt.Sprintf("Elasticsearch ingest failed: %v", err))
+		g.writeUpstreamErrorJSON(w, r, http.StatusBadGateway, "elasticsearch_ingest", err)
 		return
 	}
 
@@ -456,7 +457,7 @@ func (g *Gateway) handleBulkIngest(w http.ResponseWriter, r *http.Request) {
 
 	spaceName, err := g.authorizeIngestRequest(r, indexName)
 	if err != nil {
-		writeIngestAuthError(w, err)
+		g.writeIngestAuthError(w, r, err)
 		return
 	}
 
@@ -467,7 +468,7 @@ func (g *Gateway) handleBulkIngest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := g.Client.EnsureKibanaDataView(r.Context(), spaceName, indexName); err != nil {
-		writeErrorJSON(w, http.StatusBadGateway, fmt.Sprintf("Kibana setup failed: %v", err))
+		g.writeUpstreamErrorJSON(w, r, http.StatusBadGateway, "kibana_setup", err)
 		return
 	}
 
@@ -476,7 +477,7 @@ func (g *Gateway) handleBulkIngest(w http.ResponseWriter, r *http.Request) {
 	for _, alias := range aliases {
 		bootstrapped, err := g.Client.EnsureWriteAlias(r.Context(), alias)
 		if err != nil {
-			writeErrorJSON(w, http.StatusBadGateway, fmt.Sprintf("Elasticsearch bootstrap failed: %v", err))
+			g.writeUpstreamErrorJSON(w, r, http.StatusBadGateway, "elasticsearch_bootstrap", err)
 			return
 		}
 		if bootstrapped {
@@ -486,7 +487,7 @@ func (g *Gateway) handleBulkIngest(w http.ResponseWriter, r *http.Request) {
 
 	indexed, err := g.Client.BulkIndexDocuments(r.Context(), documents)
 	if err != nil {
-		writeErrorJSON(w, http.StatusBadGateway, fmt.Sprintf("Elasticsearch bulk ingest failed: %v", err))
+		g.writeUpstreamErrorJSON(w, r, http.StatusBadGateway, "elasticsearch_bulk_ingest", err)
 		return
 	}
 
@@ -569,6 +570,42 @@ func (g *Gateway) logLoginFailure(r *http.Request, username string, status int, 
 	}
 
 	g.logger().WarnContext(r.Context(), "user login failed", attrs...)
+}
+
+func (g *Gateway) writeUpstreamErrorJSON(w http.ResponseWriter, r *http.Request, status int, operation string, err error) {
+	g.logUpstreamFailure(r, status, operation, err)
+	writeErrorJSON(w, status, upstreamErrorMessage)
+}
+
+func (g *Gateway) logUpstreamFailure(r *http.Request, status int, operation string, err error) {
+	attrs := []any{
+		slog.String("event", "upstream_request_failed"),
+		slog.String("operation", operation),
+		slog.Int("http_status", status),
+		slog.String("client_error", upstreamErrorMessage),
+	}
+	if r != nil {
+		attrs = append(attrs, g.requestLogAttrs(r)...)
+	}
+	if err != nil {
+		attrs = append(attrs, slog.String("error", err.Error()))
+
+		var responseErr *elastic.ResponseError
+		if errors.As(err, &responseErr) {
+			attrs = append(attrs, slog.Group("upstream",
+				slog.String("method", responseErr.Method),
+				slog.String("path", responseErr.Path),
+				slog.Int("status", responseErr.StatusCode),
+				slog.String("body", responseErr.Body),
+			))
+		}
+	}
+
+	if r != nil {
+		g.logger().WarnContext(r.Context(), "upstream request failed", attrs...)
+		return
+	}
+	g.logger().Warn("upstream request failed", attrs...)
 }
 
 func (g *Gateway) logLogout(r *http.Request, sessionData Session, authenticated bool) {
@@ -683,14 +720,14 @@ func writeIngestPathError(w http.ResponseWriter, r *http.Request, err error) {
 	writeErrorJSON(w, http.StatusBadRequest, err.Error())
 }
 
-func writeIngestAuthError(w http.ResponseWriter, err error) {
+func (g *Gateway) writeIngestAuthError(w http.ResponseWriter, r *http.Request, err error) {
 	switch {
 	case errors.Is(err, errIngestAuthRequired), errors.Is(err, ldappkg.ErrInvalidCredentials), errors.Is(err, ldappkg.ErrUserNotFound):
 		writeIngestAuthRequired(w, "LDAP username and password are required for ingest")
 	case errors.Is(err, ldappkg.ErrUnauthorized), errors.Is(err, errIngestForbidden):
 		writeErrorJSON(w, http.StatusForbidden, "your LDAP account is not allowed to ingest into this index")
 	default:
-		writeErrorJSON(w, http.StatusBadGateway, fmt.Sprintf("LDAP authentication failed: %v", err))
+		g.writeUpstreamErrorJSON(w, r, http.StatusBadGateway, "ldap_authentication", err)
 	}
 }
 

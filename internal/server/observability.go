@@ -45,7 +45,7 @@ func (g *Gateway) handleProbe(w http.ResponseWriter, r *http.Request, okStatus, 
 	ctx, cancel := context.WithTimeout(r.Context(), probeTimeout)
 	defer cancel()
 
-	checks, ok := g.probeChecks(ctx)
+	checks, ok := g.probeChecks(ctx, r)
 	status := http.StatusOK
 	responseStatus := okStatus
 	if !ok {
@@ -60,7 +60,7 @@ func (g *Gateway) handleProbe(w http.ResponseWriter, r *http.Request, okStatus, 
 	})
 }
 
-func (g *Gateway) probeChecks(ctx context.Context) (map[string]probeCheck, bool) {
+func (g *Gateway) probeChecks(ctx context.Context, r *http.Request) (map[string]probeCheck, bool) {
 	checks := map[string]probeCheck{
 		"elasticsearch": {Status: "ok"},
 		"kibana":        {Status: "ok"},
@@ -74,7 +74,8 @@ func (g *Gateway) probeChecks(ctx context.Context) (map[string]probeCheck, bool)
 	}
 
 	if err := g.Client.PingElasticsearch(ctx); err != nil {
-		checks["elasticsearch"] = probeCheck{Status: "error", Error: err.Error()}
+		checks["elasticsearch"] = probeCheck{Status: "error", Error: upstreamErrorMessage}
+		g.logUpstreamFailure(r, http.StatusServiceUnavailable, "elasticsearch_probe", err)
 		ok = false
 	}
 
@@ -83,7 +84,8 @@ func (g *Gateway) probeChecks(ctx context.Context) (map[string]probeCheck, bool)
 		return checks, ok
 	}
 	if err := g.Client.PingKibana(ctx); err != nil {
-		checks["kibana"] = probeCheck{Status: "error", Error: err.Error()}
+		checks["kibana"] = probeCheck{Status: "error", Error: upstreamErrorMessage}
+		g.logUpstreamFailure(r, http.StatusServiceUnavailable, "kibana_probe", err)
 		ok = false
 	}
 

@@ -1476,6 +1476,29 @@ func TestGatewayIngestRejectsInvalidCredentials(t *testing.T) {
 	}
 }
 
+func TestGatewayIngestLDAPFailureReturnsGenericBadGateway(t *testing.T) {
+	t.Parallel()
+
+	elasticSearch := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected Elasticsearch request: %s %s", r.Method, r.URL.Path)
+	}))
+	defer elasticSearch.Close()
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.SetBasicAuth("writer", "secret")
+
+	testGatewayHandlerWithAuth(testConfig(elasticSearch), func(_, _ string) (*authzpkg.User, []authzpkg.Access, error) {
+		return nil, nil, errors.New("LDAP bind failed against ldap.internal.example")
+	}).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("expected status 502, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	assertGenericUpstreamError(t, recorder, "LDAP bind failed", "ldap.internal.example")
+}
+
 func TestGatewayIngestRejectsReadOnlyAccess(t *testing.T) {
 	t.Parallel()
 
@@ -1789,6 +1812,56 @@ func TestGatewayBulkIngestIndexesDocuments(t *testing.T) {
 	}
 }
 
+func TestGatewayBulkIngestFailureReturnsGenericBadGateway(t *testing.T) {
+	t.Parallel()
+
+	var calls []string
+	elasticSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls = append(calls, r.Method+" "+r.URL.Path)
+
+		switch r.Method + " " + r.URL.Path {
+		case "HEAD /_alias/orders-demo-20241230-rollover":
+			w.WriteHeader(http.StatusOK)
+		case "GET /_alias/orders-demo-20241230-rollover":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"orders-demo-20241230-rollover-000001":{"aliases":{"orders-demo-20241230-rollover":{"is_write_index":true}}}}`)
+		case "PUT /orders-demo-20241230-rollover-000001/_settings":
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, `{}`)
+		case "POST /_bulk":
+			http.Error(w, `{"error":"bulk failed","stack_trace":"secret bulk stack"}`, http.StatusInternalServerError)
+		default:
+			t.Fatalf("unexpected Elasticsearch request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer elasticSearch.Close()
+
+	body := strings.Join([]string{
+		`{"index":{"_id":"one"}}`,
+		`{"event_time":"2024-12-30T10:11:12Z","message":"hello"}`,
+		``,
+	}, "\n")
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/ingest/orders-demo/_bulk", strings.NewReader(body))
+	request.Header.Set("Content-Type", "application/x-ndjson")
+	addTestIngestBasicAuth(request)
+
+	testGatewayHandler(testConfig(elasticSearch)).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("expected status 502, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	assertGenericUpstreamError(t, recorder, "bulk failed", "secret bulk stack")
+	if !reflect.DeepEqual(calls, []string{
+		"HEAD /_alias/orders-demo-20241230-rollover",
+		"GET /_alias/orders-demo-20241230-rollover",
+		"PUT /orders-demo-20241230-rollover-000001/_settings",
+		"POST /_bulk",
+	}) {
+		t.Fatalf("unexpected Elasticsearch sequence: %#v", calls)
+	}
+}
+
 func TestGatewayRepeatWriteSkipsBootstrap(t *testing.T) {
 	t.Parallel()
 
@@ -2000,6 +2073,7 @@ func TestGatewayElasticsearchFailuresReturnBadGateway(t *testing.T) {
 		name      string
 		handler   http.HandlerFunc
 		wantCalls []string
+		noLeak    []string
 	}{
 		{
 			name: "alias head failure",
@@ -2010,6 +2084,7 @@ func TestGatewayElasticsearchFailuresReturnBadGateway(t *testing.T) {
 				http.Error(w, "boom", http.StatusInternalServerError)
 			},
 			wantCalls: []string{"HEAD /_alias/orders-demo-20241230-rollover"},
+			noLeak:    []string{"boom"},
 		},
 		{
 			name: "bootstrap put failure",
@@ -2022,6 +2097,7 @@ func TestGatewayElasticsearchFailuresReturnBadGateway(t *testing.T) {
 				"HEAD /_alias/orders-demo-20241230-rollover",
 				"PUT /orders-demo-20241230-rollover-000001",
 			},
+			noLeak: []string{"create failed"},
 		},
 		{
 			name: "document post failure",
@@ -2038,6 +2114,7 @@ func TestGatewayElasticsearchFailuresReturnBadGateway(t *testing.T) {
 				"PUT /orders-demo-20241230-rollover-000001/_settings",
 				"POST /orders-demo-20241230-rollover/_doc",
 			},
+			noLeak: []string{"index failed"},
 		},
 	}
 
@@ -2060,6 +2137,7 @@ func TestGatewayElasticsearchFailuresReturnBadGateway(t *testing.T) {
 			if recorder.Code != http.StatusBadGateway {
 				t.Fatalf("expected status 502, got %d: %s", recorder.Code, recorder.Body.String())
 			}
+			assertGenericUpstreamError(t, recorder, tt.noLeak...)
 			if !reflect.DeepEqual(calls, tt.wantCalls) {
 				t.Fatalf("unexpected Elasticsearch sequence: %#v", calls)
 			}
@@ -2095,6 +2173,7 @@ func TestGatewaySpaceFailureReturnsBadGateway(t *testing.T) {
 	if recorder.Code != http.StatusBadGateway {
 		t.Fatalf("expected status 502, got %d: %s", recorder.Code, recorder.Body.String())
 	}
+	assertGenericUpstreamError(t, recorder, "space lookup failed")
 	if !reflect.DeepEqual(kibanaCalls, []string{
 		"GET /api/spaces/space/orders",
 	}) {
@@ -2138,6 +2217,7 @@ func TestGatewayDataViewFailureReturnsBadGateway(t *testing.T) {
 	if recorder.Code != http.StatusBadGateway {
 		t.Fatalf("expected status 502, got %d: %s", recorder.Code, recorder.Body.String())
 	}
+	assertGenericUpstreamError(t, recorder, "data view create failed")
 	if !reflect.DeepEqual(kibanaCalls, []string{
 		"GET /api/spaces/space/orders",
 		"GET /s/orders/api/data_views/data_view/gateway-index-pattern-orders-demo",
@@ -2308,6 +2388,25 @@ func defaultTestLDAPAuthenticator(username, password string) (*authzpkg.User, []
 
 func addTestIngestBasicAuth(request *http.Request) {
 	request.SetBasicAuth("writer", "secret")
+}
+
+func assertGenericUpstreamError(t *testing.T, recorder *httptest.ResponseRecorder, leakedTokens ...string) {
+	t.Helper()
+
+	var response serverpkg.ErrorResponse
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatalf("decode error response: %v; body=%q", err, recorder.Body.String())
+	}
+	if response.Error != "upstream error, see logs" {
+		t.Fatalf("expected generic upstream error, got %#v", response)
+	}
+
+	body := recorder.Body.String()
+	for _, token := range leakedTokens {
+		if token != "" && strings.Contains(body, token) {
+			t.Fatalf("response leaked upstream detail %q: %q", token, body)
+		}
+	}
 }
 
 func mustEncodeSessionCookieFromData(tb testing.TB, g *serverpkg.Gateway, data serverpkg.Session) (string, time.Time) {

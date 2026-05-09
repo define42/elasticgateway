@@ -199,6 +199,7 @@ func TestGatewayKibanaCoverage(t *testing.T) {
 		if recorder.Code != http.StatusBadGateway {
 			t.Fatalf("expected status 502, got %d: %s", recorder.Code, recorder.Body.String())
 		}
+		assertGenericUpstreamError(t, recorder, "missing protocol scheme")
 	})
 }
 

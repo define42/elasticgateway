@@ -40,7 +40,7 @@ type ResponseError struct {
 
 // Error formats the upstream failure response.
 func (e *ResponseError) Error() string {
-	return fmt.Sprintf("%s %s failed: status=%d body=%s", e.Method, e.Path, e.StatusCode, e.Body)
+	return fmt.Sprintf("%s %s failed: status=%d", e.Method, e.Path, e.StatusCode)
 }
 
 // IndexDocumentResponse captures the Elasticsearch index API response fields used by the gateway.

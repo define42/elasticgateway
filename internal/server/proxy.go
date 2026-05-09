@@ -27,8 +27,8 @@ func (g *Gateway) proxyKibana(w http.ResponseWriter, r *http.Request, sessionDat
 			pr.Out.Header.Set("X-Forwarded-Proto", forwardedProto(pr.In, g.Client.Config.ForceSecureCookies))
 			pr.Out.Header.Set("X-Forwarded-Prefix", kibanaBasePath)
 		},
-		ErrorHandler: func(proxyWriter http.ResponseWriter, _ *http.Request, proxyErr error) {
-			writeErrorJSON(proxyWriter, http.StatusBadGateway, fmt.Sprintf("Kibana proxy failed: %v", proxyErr))
+		ErrorHandler: func(proxyWriter http.ResponseWriter, proxyRequest *http.Request, proxyErr error) {
+			g.writeUpstreamErrorJSON(proxyWriter, proxyRequest, http.StatusBadGateway, "kibana_proxy", proxyErr)
 		},
 	}
 

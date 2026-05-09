@@ -164,6 +164,86 @@ func TestGatewayLogsLoginFailureAsJSON(t *testing.T) {
 	}
 }
 
+func TestGatewayLogsUpstreamFailureDetailsAndReturnsGenericError(t *testing.T) {
+	var logOutput bytes.Buffer
+	elasticSearch := httptest.NewServer(upstreamFailureDetailsHandler(t))
+	defer elasticSearch.Close()
+
+	gateway := New(elasticpkg.NewClient(appconfig.Config{
+		ElasticsearchURL: elasticSearch.URL,
+		HTTPClient:       elasticSearch.Client(),
+	}), func(username, _ string) (*authz.User, []authz.Access, error) {
+		return &authz.User{Name: username}, []authz.Access{
+			{Group: "orders_ingest", Namespace: "orders"},
+		}, nil
+	})
+	gateway.Logger = testJSONLogger(&logOutput)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.SetBasicAuth("alice", "secret")
+
+	gateway.Handler().ServeHTTP(recorder, request)
+
+	assertGenericUpstreamFailureResponse(t, recorder)
+	assertUpstreamFailureLogEntry(t, &logOutput)
+}
+
+func upstreamFailureDetailsHandler(t *testing.T) http.HandlerFunc {
+	t.Helper()
+
+	return func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "HEAD /_alias/orders-demo-20241230-rollover":
+			w.WriteHeader(http.StatusOK)
+		case "GET /_alias/orders-demo-20241230-rollover":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"orders-demo-20241230-rollover-000001":{"aliases":{"orders-demo-20241230-rollover":{"is_write_index":true}}}}`))
+		case "PUT /orders-demo-20241230-rollover-000001/_settings":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{}`))
+		case "POST /orders-demo-20241230-rollover/_doc":
+			http.Error(w, `{"error":"index failed","stack_trace":"secret stack"}`, http.StatusInternalServerError)
+		default:
+			t.Fatalf("unexpected Elasticsearch request: %s %s", r.Method, r.URL.Path)
+		}
+	}
+}
+
+func assertGenericUpstreamFailureResponse(t *testing.T, recorder *httptest.ResponseRecorder) {
+	t.Helper()
+
+	if recorder.Code != http.StatusBadGateway {
+		t.Fatalf("expected status 502, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if body := recorder.Body.String(); !strings.Contains(body, upstreamErrorMessage) || strings.Contains(body, "secret stack") {
+		t.Fatalf("expected generic client error without upstream details, got %q", body)
+	}
+}
+
+func assertUpstreamFailureLogEntry(t *testing.T, output *bytes.Buffer) {
+	t.Helper()
+
+	entry := onlyLogEntry(t, output)
+	if entry["event"] != "upstream_request_failed" || entry["operation"] != "elasticsearch_ingest" || entry["level"] != "WARN" {
+		t.Fatalf("unexpected upstream failure log entry: %#v", entry)
+	}
+	if entry["client_error"] != upstreamErrorMessage || entry["http_status"] != float64(http.StatusBadGateway) {
+		t.Fatalf("unexpected upstream failure log fields: %#v", entry)
+	}
+	upstream, ok := entry["upstream"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected structured upstream log fields, got %#v", entry["upstream"])
+	}
+	if upstream["method"] != http.MethodPost || upstream["path"] != "/orders-demo-20241230-rollover/_doc" || upstream["status"] != float64(http.StatusInternalServerError) {
+		t.Fatalf("unexpected upstream log fields: %#v", upstream)
+	}
+	if body, ok := upstream["body"].(string); !ok || !strings.Contains(body, "secret stack") {
+		t.Fatalf("expected raw upstream body in logs, got %#v", upstream["body"])
+	}
+}
+
 func TestGatewayLogsLogoutAsJSON(t *testing.T) {
 	var logOutput bytes.Buffer
 	gateway := New(elasticpkg.NewClient(appconfig.Config{}), nil)
@@ -494,6 +574,7 @@ func TestHealthAndReadyzProbeElasticsearchAndKibana(t *testing.T) {
 }
 
 func TestReadyzReturnsUnavailableWhenKibanaPingFails(t *testing.T) {
+	var logOutput bytes.Buffer
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method + " " + r.URL.Path {
 		case "GET /":
@@ -512,6 +593,7 @@ func TestReadyzReturnsUnavailableWhenKibanaPingFails(t *testing.T) {
 		KibanaURL:        upstream.URL,
 		HTTPClient:       upstream.Client(),
 	}), nil)
+	gateway.Logger = testJSONLogger(&logOutput)
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 
@@ -526,6 +608,21 @@ func TestReadyzReturnsUnavailableWhenKibanaPingFails(t *testing.T) {
 	}
 	if response.Status != "not_ready" || response.Checks["kibana"].Status != "error" {
 		t.Fatalf("unexpected probe response: %#v", response)
+	}
+	if response.Checks["kibana"].Error != upstreamErrorMessage {
+		t.Fatalf("expected generic probe error, got %#v", response.Checks["kibana"])
+	}
+
+	entry := onlyLogEntry(t, &logOutput)
+	if entry["event"] != "upstream_request_failed" || entry["operation"] != "kibana_probe" {
+		t.Fatalf("unexpected probe failure log entry: %#v", entry)
+	}
+	upstreamFields, ok := entry["upstream"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected structured upstream probe fields, got %#v", entry["upstream"])
+	}
+	if body, ok := upstreamFields["body"].(string); !ok || !strings.Contains(body, "kibana unavailable") {
+		t.Fatalf("expected raw probe body in logs, got %#v", upstreamFields["body"])
 	}
 }
 
