@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"html/template"
 	"log/slog"
 	"net/http"
@@ -18,6 +19,50 @@ import (
 	appconfig "github.com/define42/elasticgateway/internal/config"
 	elasticpkg "github.com/define42/elasticgateway/internal/elastic"
 )
+
+func TestSessionFormattingAndLoggingRedactsAuthHeader(t *testing.T) {
+	authHeader := BuildBasicAuthorization("alice", "super-secret")
+	sessionData := Session{
+		User: &authz.User{Name: "alice"},
+		Access: []authz.Access{
+			{Group: "team1_user", Namespace: "team1", PullOnly: true},
+		},
+		AuthHeader: authHeader,
+	}
+
+	for _, formatted := range []string{
+		sessionData.String(),
+		fmt.Sprint(sessionData),
+		fmt.Sprintf("%+v", sessionData),
+		fmt.Sprintf("%#v", sessionData),
+		fmt.Sprintf("%#v", &sessionData),
+	} {
+		if strings.Contains(formatted, authHeader) || strings.Contains(formatted, "super-secret") || strings.Contains(formatted, "Basic ") {
+			t.Fatalf("session formatting leaked AuthHeader: %s", formatted)
+		}
+		if !strings.Contains(formatted, "<redacted>") {
+			t.Fatalf("session formatting did not mark AuthHeader as redacted: %s", formatted)
+		}
+	}
+
+	var output bytes.Buffer
+	logger := testJSONLogger(&output)
+	logger.Info("session", slog.Any("session", sessionData))
+
+	logLine := output.String()
+	if strings.Contains(logLine, authHeader) || strings.Contains(logLine, "super-secret") || strings.Contains(logLine, "Basic ") {
+		t.Fatalf("session logging leaked AuthHeader: %s", logLine)
+	}
+
+	entry := onlyLogEntry(t, &output)
+	loggedSession, ok := entry["session"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected structured session log value, got %#v", entry["session"])
+	}
+	if got := loggedSession["AuthHeader"]; got != "<redacted>" {
+		t.Fatalf("expected redacted AuthHeader in session log, got %#v", got)
+	}
+}
 
 func TestGatewayLogsLoginSuccessIgnoresSpoofedXForwardedForByDefault(t *testing.T) {
 	var logOutput bytes.Buffer

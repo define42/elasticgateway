@@ -39,6 +39,34 @@ type Session struct {
 	AuthHeader string
 }
 
+// String returns a redacted representation so accidental fmt-based logging
+// cannot expose the Basic credentials carried in AuthHeader.
+func (s Session) String() string {
+	return fmt.Sprintf("Session{User:%+v Access:%+v AuthHeader:%q}", s.User, s.Access, redactedAuthHeader(s.AuthHeader))
+}
+
+// GoString ensures verbose %#v formatting uses the redacted representation
+// instead of reflecting the exported AuthHeader field.
+func (s Session) GoString() string {
+	return s.String()
+}
+
+// LogValue returns a redacted structured representation for slog.Any.
+func (s Session) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.Any("User", s.User),
+		slog.Any("Access", s.Access),
+		slog.String("AuthHeader", redactedAuthHeader(s.AuthHeader)),
+	)
+}
+
+func redactedAuthHeader(header string) string {
+	if header == "" {
+		return ""
+	}
+	return "<redacted>"
+}
+
 const (
 	// SessionCookieName is the cookie that carries the gateway session token.
 	SessionCookieName              = "elasticgateway_session"
