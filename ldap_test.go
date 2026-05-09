@@ -32,12 +32,12 @@ func TestPermissionsFromGroup(t *testing.T) {
 			wantOK:        true,
 		},
 		{
-			name:          "rd group parses read delete access",
+			name:          "rd group is rejected",
 			group:         "team10_rd",
-			wantNamespace: "team10",
-			wantPullOnly:  true,
-			wantDelete:    true,
-			wantOK:        true,
+			wantNamespace: "",
+			wantPullOnly:  false,
+			wantDelete:    false,
+			wantOK:        false,
 		},
 		{
 			name:          "rw group parses read write access",
@@ -106,7 +106,7 @@ func TestGroupNameFromDN(t *testing.T) {
 	}{
 		{name: "cn prefix", dn: "cn=team10_rw,ou=groups,dc=glauth,dc=com", want: "team10_rw"},
 		{name: "ou prefix", dn: "ou=team10_r,dc=glauth,dc=com", want: "team10_r"},
-		{name: "plain value", dn: "team10_rd", want: "team10_rd"},
+		{name: "plain value", dn: "team10_rwd", want: "team10_rwd"},
 	}
 
 	for _, tt := range tests {
@@ -225,8 +225,8 @@ func TestMorePermissive(t *testing.T) {
 		want bool
 	}{
 		{
-			name: "delete access outranks write-only access",
-			a:    &authzpkg.User{Name: "a", Namespace: "team10", PullOnly: true, DeleteAllowed: true},
+			name: "full access outranks write-only access",
+			a:    &authzpkg.User{Name: "a", Namespace: "team10", PullOnly: false, DeleteAllowed: true},
 			b:    &authzpkg.User{Name: "b", Namespace: "team10", PullOnly: false, DeleteAllowed: false},
 			want: true,
 		},
@@ -237,9 +237,9 @@ func TestMorePermissive(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "full access outranks read-delete access",
+			name: "full access outranks read-only access",
 			a:    &authzpkg.User{Name: "a", Namespace: "team10", PullOnly: false, DeleteAllowed: true},
-			b:    &authzpkg.User{Name: "b", Namespace: "team10", PullOnly: true, DeleteAllowed: true},
+			b:    &authzpkg.User{Name: "b", Namespace: "team10", PullOnly: true, DeleteAllowed: false},
 			want: true,
 		},
 		{

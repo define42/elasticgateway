@@ -16,12 +16,11 @@ The gateway reads group names from `LDAP_GROUP_ATTRIBUTE`, keeps only groups mat
 | LDAP group | Namespace | Kibana space privilege | Elasticsearch index pattern | Ingest |
 | --- | --- | --- | --- | --- |
 | `<namespace>_r` | `<namespace>` | full Discover, Dashboard, and Visualize access | read on `<namespace>-*` | no |
-| `<namespace>_rd` | `<namespace>` | full space access | read and delete on `<namespace>-*` | no |
 | `<namespace>_rw` | `<namespace>` | full space access | read and write on `<namespace>-*` | yes |
 | `<namespace>_rwd` | `<namespace>` | full space access | read, write, and delete on `<namespace>-*` | yes |
 
 Read-only groups (`<namespace>_r`) get feature-level Kibana `all` privileges for `dashboard_v2`, `visualize_v2`, and `discover_v2`; they do not get Kibana `base` privileges, so Stack Management is not granted.
-Write/delete-capable groups (`<namespace>_rw`, `<namespace>_rd`, and `<namespace>_rwd`) get Kibana `base: ["all"]` inside their namespace space.
+Write-capable groups (`<namespace>_rw` and `<namespace>_rwd`) get Kibana `base: ["all"]` inside their namespace space.
 
 On login, the gateway provisions:
 

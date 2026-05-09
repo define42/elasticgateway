@@ -902,7 +902,6 @@ func TestRoleRequestForAccessModes(t *testing.T) {
 			"discover_v2":  {"all"},
 			"visualize_v2": {"all"},
 		}},
-		{name: "read delete", access: authzpkg.Access{Namespace: "team1", PullOnly: true, DeleteAllowed: true}, wantAllowed: []string{"read", "delete", "view_index_metadata"}, wantBase: []string{"all"}, wantFeature: map[string][]string{}},
 		{name: "read write", access: authzpkg.Access{Namespace: "team1", PullOnly: false}, wantAllowed: []string{"read", "write", "create_index", "view_index_metadata"}, wantBase: []string{"all"}, wantFeature: map[string][]string{}},
 		{name: "read write delete", access: authzpkg.Access{Namespace: "team1", PullOnly: false, DeleteAllowed: true}, wantAllowed: []string{"read", "write", "delete", "create_index", "view_index_metadata"}, wantBase: []string{"all"}, wantFeature: map[string][]string{}},
 	}
@@ -934,7 +933,7 @@ func TestNormalizeAccessByNamespaceCombinesPermissions(t *testing.T) {
 
 	result := authzpkg.NormalizeAccessByNamespace([]authzpkg.Access{
 		{Group: "team1_rw", Namespace: "team1", PullOnly: false},
-		{Group: "team1_rd", Namespace: "team1", PullOnly: true, DeleteAllowed: true},
+		{Group: "team1_rwd", Namespace: "team1", PullOnly: false, DeleteAllowed: true},
 		{Group: "team2_r", Namespace: "team2", PullOnly: true},
 	})
 

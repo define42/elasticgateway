@@ -187,9 +187,6 @@ func PermissionsFromGroup(group string) (namespace string, pullOnly bool, delete
 	case strings.HasSuffix(group, "_rw"):
 		ns := strings.TrimSuffix(group, "_rw")
 		return ns, false, false, true
-	case strings.HasSuffix(group, "_rd"):
-		ns := strings.TrimSuffix(group, "_rd")
-		return ns, true, true, true
 	case strings.HasSuffix(group, "_r"):
 		ns := strings.TrimSuffix(group, "_r")
 		return ns, true, false, true
