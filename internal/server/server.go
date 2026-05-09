@@ -2,6 +2,7 @@
 package server
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/sha512"
@@ -59,6 +60,8 @@ type Gateway struct {
 	Authenticate    AuthenticateFunc
 	IngestAuthCache *ingest.AuthCache
 	SecureCookie    *securecookie.SecureCookie
+	kibanaTarget    *url.URL
+	kibanaTargetErr error
 }
 
 // LoginPageData is the template model for the login form.
@@ -98,11 +101,15 @@ func New(client *elastic.Client, authenticate AuthenticateFunc) *Gateway {
 		}
 	}
 
+	kibanaTarget, kibanaTargetErr := url.Parse(client.Config.KibanaURL)
+
 	return &Gateway{
 		Client:          client,
 		Authenticate:    authenticate,
 		IngestAuthCache: ingest.NewAuthCache(),
 		SecureCookie:    newSecureCookie(client.Config.SessionSecret),
+		kibanaTarget:    kibanaTarget,
+		kibanaTargetErr: kibanaTargetErr,
 	}
 }
 
@@ -465,12 +472,16 @@ func (g *Gateway) handleBulkIngest(w http.ResponseWriter, r *http.Request) {
 
 // RenderLoginPage writes the login page with the supplied status and model.
 func (g *Gateway) RenderLoginPage(w http.ResponseWriter, status int, data LoginPageData) {
+	var page bytes.Buffer
+	if err := loginPageTemplate.Execute(&page, data); err != nil {
+		http.Error(w, "failed to render login page", http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
-	if err := loginPageTemplate.Execute(w, data); err != nil {
-		http.Error(w, "failed to render login page", http.StatusInternalServerError)
-	}
+	_, _ = w.Write(page.Bytes())
 }
 
 func loginErrorResponse(err error) (int, string) {

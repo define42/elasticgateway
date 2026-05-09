@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"html/template"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -71,6 +72,58 @@ func TestKibanaProxyForceSecureCookiesForwardsHTTPS(t *testing.T) {
 	}
 	if forwardedProto != "https" {
 		t.Fatalf("expected forced X-Forwarded-Proto https, got %q", forwardedProto)
+	}
+}
+
+func TestKibanaProxyUsesConstructedTargetURL(t *testing.T) {
+	var proxied bool
+	kibana := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		proxied = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer kibana.Close()
+
+	gateway := New(elasticpkg.NewClient(appconfig.Config{KibanaURL: kibana.URL}), nil)
+	encoded, err := gateway.EncodeSessionCookieValue(Session{
+		User:       &authz.User{Name: "alice"},
+		AuthHeader: BuildBasicAuthorization("alice", "secret"),
+	})
+	if err != nil {
+		t.Fatalf("encode session cookie: %v", err)
+	}
+	gateway.Client.Config.KibanaURL = "://bad"
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/kibana/app/home", nil)
+	request.AddCookie(&http.Cookie{Name: SessionCookieName, Value: encoded})
+
+	gateway.Handler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if !proxied {
+		t.Fatal("expected request to reach constructed Kibana target")
+	}
+}
+
+func TestRenderLoginPageTemplateFailureReturnsInternalServerError(t *testing.T) {
+	originalTemplate := loginPageTemplate
+	loginPageTemplate = template.Must(template.New("login").Parse(`{{.Missing.Value}}`))
+	t.Cleanup(func() {
+		loginPageTemplate = originalTemplate
+	})
+
+	gateway := New(elasticpkg.NewClient(appconfig.Config{}), nil)
+	recorder := httptest.NewRecorder()
+
+	gateway.RenderLoginPage(recorder, http.StatusTeapot, LoginPageData{})
+
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status 500, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "failed to render login page") {
+		t.Fatalf("expected render failure message, got %q", recorder.Body.String())
 	}
 }
 
