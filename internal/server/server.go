@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"crypto/rand"
 	"crypto/sha256"
-	"crypto/sha512"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -25,6 +24,7 @@ import (
 	"github.com/define42/elasticgateway/internal/ingest"
 	ldappkg "github.com/define42/elasticgateway/internal/ldap"
 	"github.com/gorilla/securecookie"
+	"golang.org/x/crypto/hkdf"
 )
 
 // Session is the value carried inside the encrypted session cookie. It holds
@@ -122,10 +122,8 @@ func New(client *elastic.Client, authenticate AuthenticateFunc) *Gateway {
 func newSecureCookie(sessionSecret string, sessionMaxAge int) *securecookie.SecureCookie {
 	sessionSecret = strings.TrimSpace(sessionSecret)
 	if sessionSecret != "" {
-		return securecookie.New(
-			deriveSessionHashKey(sessionSecret),
-			deriveSessionBlockKey(sessionSecret),
-		).MaxAge(sessionMaxAge)
+		hashKey, blockKey := deriveSessionKeys(sessionSecret)
+		return securecookie.New(hashKey, blockKey).MaxAge(sessionMaxAge)
 	}
 
 	hashKey := securecookie.GenerateRandomKey(64)
@@ -133,14 +131,24 @@ func newSecureCookie(sessionSecret string, sessionMaxAge int) *securecookie.Secu
 	return securecookie.New(hashKey, blockKey).MaxAge(sessionMaxAge)
 }
 
-func deriveSessionHashKey(sessionSecret string) []byte {
-	sum := sha512.Sum512([]byte("elasticgateway session hash\x00" + sessionSecret))
-	return sum[:]
-}
+func deriveSessionKeys(sessionSecret string) ([]byte, []byte) {
+	const (
+		hashKeyBytes  = 64
+		blockKeyBytes = 32
+	)
 
-func deriveSessionBlockKey(sessionSecret string) []byte {
-	sum := sha256.Sum256([]byte("elasticgateway session block\x00" + sessionSecret))
-	return sum[:]
+	keys := make([]byte, hashKeyBytes+blockKeyBytes)
+	keyStream := hkdf.New(
+		sha256.New,
+		[]byte(sessionSecret),
+		nil,
+		[]byte("elasticgateway session cookie keys"),
+	)
+	if _, err := io.ReadFull(keyStream, keys); err != nil {
+		panic(fmt.Sprintf("derive session cookie keys: %v", err))
+	}
+
+	return keys[:hashKeyBytes], keys[hashKeyBytes:]
 }
 
 // EncodeSessionCookieValue encodes a session into a securecookie value.
