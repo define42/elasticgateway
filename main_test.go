@@ -276,7 +276,6 @@ func TestEnsureSpaceReturnsErrorOnFailure(t *testing.T) {
 	}
 }
 
-//nolint:funlen // End-to-end data-view setup keeps request assertions together.
 func TestEnsureKibanaDataViewCreatesExpectedPatternWithoutOverwritingDefault(t *testing.T) {
 	t.Parallel()
 
@@ -1027,7 +1026,7 @@ func TestGatewayKibanaProxyForwardsMultiNamespaceSession(t *testing.T) {
 	}))
 	defer elasticSearch.Close()
 
-	kibana := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	kibana := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
 		_, _ = io.WriteString(w, "proxied kibana")
 	}))
@@ -1816,7 +1815,7 @@ func TestGatewayElasticsearchFailuresReturnBadGateway(t *testing.T) {
 func TestGatewaySpaceFailureReturnsBadGateway(t *testing.T) {
 	t.Parallel()
 
-	elasticSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	elasticSearch := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		t.Fatalf("unexpected Elasticsearch request: %s %s", r.Method, r.URL.Path)
 	}))
 	defer elasticSearch.Close()
@@ -1851,7 +1850,7 @@ func TestGatewaySpaceFailureReturnsBadGateway(t *testing.T) {
 func TestGatewayDataViewFailureReturnsBadGateway(t *testing.T) {
 	t.Parallel()
 
-	elasticSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	elasticSearch := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		t.Fatalf("unexpected Elasticsearch request: %s %s", r.Method, r.URL.Path)
 	}))
 	defer elasticSearch.Close()

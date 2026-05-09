@@ -11,17 +11,6 @@ import (
 	"github.com/define42/opensearchgateway/internal/authz"
 )
 
-var reservedNativeUsers = map[string]struct{}{
-	"elastic":                {},
-	"kibana":                 {},
-	"kibana_system":          {},
-	"logstash_system":        {},
-	"beats_system":           {},
-	"apm_system":             {},
-	"remote_monitoring_user": {},
-	"anonymous":              {},
-}
-
 // ProvisionLoginUser ensures roles, spaces, data views, and the native user.
 //
 // internalUserPassword is the password to set on the Elasticsearch native user
@@ -127,7 +116,7 @@ func kibanaPrivilegesForMode(mode string) ([]string, map[string][]string) {
 	case "re":
 		return []string{}, map[string][]string{
 			"dashboard_v2": {"all"},
-			"discover_v2":  {"all"},
+			"discover_v2":  {"read"},
 			"visualize_v2": {"all"},
 		}
 	case "rw", "rd", "rwd":
@@ -164,7 +153,7 @@ func (c *Client) UpsertNativeUser(ctx context.Context, username, internalUserPas
 // EnsureNativeUserWritable rejects built-in or reserved native users.
 func (c *Client) EnsureNativeUserWritable(ctx context.Context, username string) error {
 	username = strings.TrimSpace(username)
-	if _, reserved := reservedNativeUsers[username]; reserved {
+	if isReservedNativeUser(username) {
 		return fmt.Errorf("%w: %s", ErrReservedNativeUser, username)
 	}
 
@@ -187,6 +176,22 @@ func (c *Client) EnsureNativeUserWritable(ctx context.Context, username string) 
 		return fmt.Errorf("%w: %s", ErrReservedNativeUser, username)
 	}
 	return nil
+}
+
+func isReservedNativeUser(username string) bool {
+	switch username {
+	case "elastic",
+		"kibana",
+		"kibana_system",
+		"logstash_system",
+		"beats_system",
+		"apm_system",
+		"remote_monitoring_user",
+		"anonymous":
+		return true
+	default:
+		return false
+	}
 }
 
 func metadataBool(metadata map[string]any, key string) bool {

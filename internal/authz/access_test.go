@@ -5,13 +5,28 @@ import "testing"
 func TestResolveIngestWriteNamespace(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name      string
-		access    []Access
-		indexName string
-		want      string
-		wantOK    bool
-	}{
+	for _, tt := range resolveIngestWriteNamespaceCases() {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, ok := ResolveIngestWriteNamespace(tt.access, tt.indexName)
+			if got != tt.want || ok != tt.wantOK {
+				t.Fatalf("ResolveIngestWriteNamespace() = %q, %v; want %q, %v", got, ok, tt.want, tt.wantOK)
+			}
+		})
+	}
+}
+
+type resolveIngestWriteNamespaceCase struct {
+	name      string
+	access    []Access
+	indexName string
+	want      string
+	wantOK    bool
+}
+
+func resolveIngestWriteNamespaceCases() []resolveIngestWriteNamespaceCase {
+	return []resolveIngestWriteNamespaceCase{
 		{
 			name:      "write access allows prefixed index",
 			access:    []Access{{Group: "team10_rw", Namespace: "team10"}},
@@ -54,16 +69,5 @@ func TestResolveIngestWriteNamespace(t *testing.T) {
 			want:      "team10",
 			wantOK:    true,
 		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			got, ok := ResolveIngestWriteNamespace(tt.access, tt.indexName)
-			if got != tt.want || ok != tt.wantOK {
-				t.Fatalf("ResolveIngestWriteNamespace() = %q, %v; want %q, %v", got, ok, tt.want, tt.wantOK)
-			}
-		})
 	}
 }

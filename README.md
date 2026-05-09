@@ -1,5 +1,7 @@
 # ElasticGateway
 
+[![codecov](https://codecov.io/gh/define42/elasticgateway/graph/badge.svg?token=E2GZ1ZDEPS)](https://codecov.io/gh/define42/elasticgateway)
+
 [![Go Report Card](https://goreportcard.com/badge/github.com/define42/elasticgateway)](https://goreportcard.com/report/github.com/define42/elasticgateway)
 [![Build Status](https://github.com/define42/elasticgateway/actions/workflows/build.yml/badge.svg)](https://github.com/define42/elasticgateway/actions/)
 
