@@ -773,6 +773,162 @@ func TestReadyzReturnsUnavailableWhenKibanaPingFails(t *testing.T) {
 	}
 }
 
+func TestProbeRejectsUnexpectedPathsAndMethods(t *testing.T) {
+	gateway := New(elasticpkg.NewClient(appconfig.Config{}), nil)
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		handle func(http.ResponseWriter, *http.Request)
+		status int
+		allow  string
+	}{
+		{
+			name:   "healthz wrong path",
+			method: http.MethodGet,
+			path:   "/elasticgateway/healthz/extra",
+			handle: gateway.handleHealthz,
+			status: http.StatusNotFound,
+		},
+		{
+			name:   "readyz wrong path",
+			method: http.MethodGet,
+			path:   "/elasticgateway/readyz/extra",
+			handle: gateway.handleReadyz,
+			status: http.StatusNotFound,
+		},
+		{
+			name:   "probe wrong method",
+			method: http.MethodPost,
+			path:   "/elasticgateway/healthz",
+			handle: gateway.handleHealthz,
+			status: http.StatusMethodNotAllowed,
+			allow:  http.MethodGet + ", " + http.MethodHead,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(tt.method, tt.path, nil)
+
+			tt.handle(recorder, request)
+
+			if recorder.Code != tt.status {
+				t.Fatalf("expected status %d, got %d: %s", tt.status, recorder.Code, recorder.Body.String())
+			}
+			if got := recorder.Header().Get("Allow"); got != tt.allow {
+				t.Fatalf("unexpected Allow header: got %q want %q", got, tt.allow)
+			}
+		})
+	}
+}
+
+func TestProbeWithoutConfiguredClientReturnsUnavailable(t *testing.T) {
+	var gateway *Gateway
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/elasticgateway/healthz", nil)
+
+	gateway.handleProbe(recorder, request, "healthy", "unhealthy")
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status 503, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var response probeResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatalf("decode probe response: %v", err)
+	}
+	if response.Status != "unhealthy" {
+		t.Fatalf("unexpected probe status: %#v", response)
+	}
+	for name, check := range response.Checks {
+		if check.Status != "error" || !strings.Contains(check.Error, "not configured") {
+			t.Fatalf("unexpected %s check: %#v", name, check)
+		}
+	}
+}
+
+func TestHealthzReturnsUnavailableWhenElasticsearchFailsAndKibanaDisabled(t *testing.T) {
+	var logOutput bytes.Buffer
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/" {
+			t.Fatalf("unexpected probe request: %s %s", r.Method, r.URL.Path)
+		}
+		http.Error(w, "elasticsearch unavailable", http.StatusServiceUnavailable)
+	}))
+	defer upstream.Close()
+
+	gateway := New(elasticpkg.NewClient(appconfig.Config{
+		ElasticsearchURL: upstream.URL,
+		HTTPClient:       upstream.Client(),
+	}), nil)
+	gateway.Logger = testJSONLogger(&logOutput)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/elasticgateway/healthz", nil)
+
+	gateway.Handler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status 503, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	var response probeResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&response); err != nil {
+		t.Fatalf("decode probe response: %v", err)
+	}
+	if response.Status != "unhealthy" {
+		t.Fatalf("unexpected probe status: %#v", response)
+	}
+	if response.Checks["elasticsearch"].Status != "error" || response.Checks["elasticsearch"].Error != upstreamErrorMessage {
+		t.Fatalf("unexpected Elasticsearch check: %#v", response.Checks["elasticsearch"])
+	}
+	if response.Checks["kibana"].Status != "disabled" {
+		t.Fatalf("unexpected Kibana check: %#v", response.Checks["kibana"])
+	}
+
+	entry := onlyLogEntry(t, &logOutput)
+	if entry["event"] != "upstream_request_failed" || entry["operation"] != "elasticsearch_probe" {
+		t.Fatalf("unexpected probe failure log entry: %#v", entry)
+	}
+}
+
+func TestForwardedForInfoHandlesMissingAndMalformedRemoteAddr(t *testing.T) {
+	var gateway *Gateway
+
+	if got := gateway.forwardedForInfo(nil); got.clientIP != "" || len(got.forwardedFor) != 0 {
+		t.Fatalf("unexpected nil request forwarded info: %#v", got)
+	}
+
+	malformed := httptest.NewRequest(http.MethodGet, "/", nil)
+	malformed.RemoteAddr = " unix socket "
+	if got := gateway.forwardedForInfo(malformed); got.clientIP != "unix socket" || len(got.forwardedFor) != 0 {
+		t.Fatalf("unexpected malformed remote forwarded info: %#v", got)
+	}
+
+	hostOnly := httptest.NewRequest(http.MethodGet, "/", nil)
+	hostOnly.RemoteAddr = "203.0.113.7"
+	if got := gateway.forwardedForInfo(hostOnly); got.clientIP != "203.0.113.7" || len(got.forwardedFor) != 0 {
+		t.Fatalf("unexpected host-only remote forwarded info: %#v", got)
+	}
+}
+
+func TestTrustedProxyWithoutUsableForwardedForFallsBackToRemotePeer(t *testing.T) {
+	gateway := New(elasticpkg.NewClient(appconfig.Config{
+		TrustedProxies: []netip.Prefix{mustTestPrefix(t, "10.0.0.0/8")},
+	}), nil)
+
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.RemoteAddr = "10.0.0.12:54321"
+	request.Header.Add("X-Forwarded-For", " , bad-ip ")
+
+	info := gateway.forwardedForInfo(request)
+
+	if info.clientIP != "10.0.0.12" || len(info.forwardedFor) != 0 {
+		t.Fatalf("unexpected forwarded info: %#v", info)
+	}
+}
+
 func TestDecodeIngestDocumentRejectsContentLengthOverLimit(t *testing.T) {
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/ingest/orders-demo", strings.NewReader(`{"event_time":"2024-12-30T10:11:12Z"}`))

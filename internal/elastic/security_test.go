@@ -67,6 +67,30 @@ func TestProvisionAndSecurityHelpers(t *testing.T) {
 		}
 	})
 
+	t.Run("ensure native user writable reserved metadata", func(t *testing.T) {
+		elasticSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"alice":{"reserved":false,"hidden":false,"metadata":{"reserved":true}}}`)
+		}))
+		defer elasticSearch.Close()
+
+		client := NewClient(testConfig(elasticSearch))
+		err := client.EnsureNativeUserWritable(context.Background(), "alice")
+		if !errors.Is(err, ErrReservedNativeUser) {
+			t.Fatalf("expected reserved metadata error, got %v", err)
+		}
+	})
+
+	t.Run("metadata bool ignores missing and non-bool values", func(t *testing.T) {
+		metadata := map[string]any{"reserved": "true"}
+		if metadataBool(metadata, "_reserved") {
+			t.Fatal("missing metadata flag should be false")
+		}
+		if metadataBool(metadata, "reserved") {
+			t.Fatal("non-bool metadata flag should be false")
+		}
+	})
+
 	t.Run("ensure security role failure", func(t *testing.T) {
 		elasticSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			http.Error(w, `{"error":"role failed"}`, http.StatusInternalServerError)
