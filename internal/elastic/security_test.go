@@ -79,7 +79,7 @@ func TestProvisionAndSecurityHelpers(t *testing.T) {
 		}
 	})
 
-	t.Run("upsert native user sends generated password", func(t *testing.T) {
+	t.Run("upsert native user sends internal password", func(t *testing.T) {
 		var body map[string]any
 		elasticSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			body = decodeRequestBody(t, r)
@@ -93,7 +93,7 @@ func TestProvisionAndSecurityHelpers(t *testing.T) {
 			t.Fatalf("UpsertNativeUser returned error: %v", err)
 		}
 		if got := body["password"]; got != "secret" {
-			t.Fatalf("expected generated plaintext password, got %#v", got)
+			t.Fatalf("expected internal plaintext password, got %#v", got)
 		}
 	})
 }

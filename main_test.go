@@ -843,7 +843,7 @@ func TestGatewayLoginSuccessProvisionsUserAndSession(t *testing.T) {
 		t.Fatalf("unexpected space description: %#v", got)
 	}
 	if got := userBody["password"]; got == "" {
-		t.Fatalf("expected plaintext generated Elasticsearch password, got %#v", got)
+		t.Fatalf("expected plaintext internal Elasticsearch password, got %#v", got)
 	}
 	if got := userBody["roles"]; !reflect.DeepEqual(got, []any{"gateway_team1_admin"}) {
 		t.Fatalf("unexpected Elasticsearch roles: %#v", got)
@@ -1987,7 +1987,8 @@ func TestGatewayElasticsearchFailuresReturnBadGateway(t *testing.T) {
 		},
 		{
 			name: "bootstrap put failure",
-			handler: sequenceHandler(t,
+			handler: sequenceHandler(
+				t,
 				responseSpec{method: http.MethodHead, path: "/_alias/orders-demo-20241230-rollover", status: http.StatusNotFound},
 				responseSpec{method: http.MethodPut, path: "/orders-demo-20241230-rollover-000001", status: http.StatusInternalServerError, body: `{"error":"create failed"}`},
 			),
@@ -1998,7 +1999,8 @@ func TestGatewayElasticsearchFailuresReturnBadGateway(t *testing.T) {
 		},
 		{
 			name: "document post failure",
-			handler: sequenceHandler(t,
+			handler: sequenceHandler(
+				t,
 				responseSpec{method: http.MethodHead, path: "/_alias/orders-demo-20241230-rollover", status: http.StatusOK},
 				responseSpec{method: http.MethodGet, path: "/_alias/orders-demo-20241230-rollover", status: http.StatusOK, body: `{"orders-demo-20241230-rollover-000001":{"aliases":{"orders-demo-20241230-rollover":{"is_write_index":true}}}}`},
 				responseSpec{method: http.MethodPut, path: "/orders-demo-20241230-rollover-000001/_settings", status: http.StatusOK, body: `{}`},

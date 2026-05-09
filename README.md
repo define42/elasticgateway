@@ -27,7 +27,7 @@ On login, the gateway provisions:
 - Kibana space named exactly like the namespace, such as `team10`
 - Kibana data view for the namespace or index family, such as `team10-*` or `team10-hello-*`
 - Kibana security role named `gateway_<namespace>_<mode>`
-- Elasticsearch native user for the login session, with a generated per-login password
+- Elasticsearch native user for the login session, with a gateway-derived internal password
 
 Multiple groups mean multiple namespaces. Duplicate groups for one namespace collapse to the strongest permission.
 If two namespaces could match one ingest path, the longest namespace wins.
@@ -124,7 +124,7 @@ Configuration is environment based.
 | `KIBANA_URL` | `http://localhost:5601` | Kibana API URL |
 | `KIBANA_USERNAME` | `ELASTICSEARCH_USERNAME` or `elastic` | Kibana API username |
 | `KIBANA_PASSWORD` | `ELASTICSEARCH_PASSWORD` or `ELASTIC_PASSWORD` or empty | Kibana API password |
-| `SESSION_SECRET` | generated at process start | Shared secret used to sign and encrypt gateway session cookies |
+| `SESSION_SECRET` | generated at process start | Shared secret used to sign and encrypt gateway session cookies and derive internal Elasticsearch passwords |
 | `SESSION_TTL` | `24h` | Gateway session lifetime, parsed as a Go duration such as `8h` or `30m`, or as seconds |
 | `FORCE_SECURE_COOKIES` | `false` | Always set the session cookie `Secure` flag and send `X-Forwarded-Proto: https` to Kibana, for TLS-terminating load balancers |
 | `LDAP_URL` | `ldaps://ldap:389` | LDAP server URL |
@@ -141,8 +141,8 @@ Production notes:
 - Set `LDAP_SKIP_TLS_VERIFY=false` with trusted LDAP certificates.
 - Set `ELASTICSEARCH_SKIP_TLS_VERIFY=false` outside local self-signed development.
 - Run the gateway behind HTTPS. If TLS terminates before the gateway, set `FORCE_SECURE_COOKIES=true` so session cookies are still sent with the `Secure` flag.
-- Set the same long random `SESSION_SECRET` on every gateway instance so sessions survive restarts and load-balanced requests.
-- If `SESSION_SECRET` is unset, the gateway generates random per-process session keys and restart invalidates existing sessions.
+- Set the same long random `SESSION_SECRET` on every gateway instance so sessions and gateway-derived Elasticsearch passwords survive restarts and load-balanced requests.
+- If `SESSION_SECRET` is unset, the gateway generates random per-process session and password keys; restart invalidates existing sessions and changes the internal Elasticsearch passwords it provisions.
 - The gateway API user needs permission to manage ILM policies, index templates, spaces, roles, native users, data views, and indices.
 
 ## Local Docker Demo

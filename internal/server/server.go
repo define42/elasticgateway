@@ -3,7 +3,7 @@ package server
 
 import (
 	"bytes"
-	"crypto/rand"
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
@@ -65,6 +65,7 @@ type Gateway struct {
 	Logger          *slog.Logger
 	kibanaTarget    *url.URL
 	kibanaTargetErr error
+	passwordSecret  []byte
 	sessionMaxAge   int
 }
 
@@ -115,6 +116,7 @@ func New(client *elastic.Client, authenticate AuthenticateFunc) *Gateway {
 		SecureCookie:    newSecureCookie(client.Config.SessionSecret, sessionMaxAge),
 		kibanaTarget:    kibanaTarget,
 		kibanaTargetErr: kibanaTargetErr,
+		passwordSecret:  newInternalPasswordSecret(client.Config.SessionSecret),
 		sessionMaxAge:   sessionMaxAge,
 	}
 }
@@ -151,6 +153,19 @@ func deriveSessionKeys(sessionSecret string) ([]byte, []byte) {
 	}
 
 	return keys[:hashKeyBytes], keys[hashKeyBytes:]
+}
+
+func newInternalPasswordSecret(sessionSecret string) []byte {
+	sessionSecret = strings.TrimSpace(sessionSecret)
+	if sessionSecret != "" {
+		return []byte(sessionSecret)
+	}
+
+	secret := securecookie.GenerateRandomKey(32)
+	if len(secret) == 0 {
+		panic("generate internal password fallback secret: entropy unavailable")
+	}
+	return secret
 }
 
 // EncodeSessionCookieValue encodes a session into a securecookie value.
@@ -339,12 +354,7 @@ func (g *Gateway) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	internalPassword, err := generateInternalUserPassword()
-	if err != nil {
-		g.logLoginFailure(r, username, http.StatusBadGateway, "session_credentials_error", err)
-		g.renderLoginError(w, http.StatusBadGateway, "failed to allocate session credentials", username)
-		return
-	}
+	internalPassword := g.internalUserPassword(username)
 
 	if err := g.Client.ProvisionLoginUser(r.Context(), username, internalPassword, access); err != nil {
 		status := http.StatusBadGateway
@@ -920,18 +930,14 @@ func BuildBasicAuthorization(username, password string) string {
 	return "Basic " + token
 }
 
-// generateInternalUserPassword returns a random password used as the
-// per-session Elasticsearch native-user password. The LDAP password is never
-// stored in Elasticsearch; only this generated value is embedded in the
-// encrypted session cookie's basic-auth header for the Kibana proxy.
-func generateInternalUserPassword() (string, error) {
-	b := make([]byte, 32)
-	// io.ReadFull(rand.Reader, ...) returns errors normally, while rand.Read
-	// fatals in Go 1.22+ — the former keeps the failure path testable.
-	if _, err := io.ReadFull(rand.Reader, b); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(b), nil
+// internalUserPassword derives the Elasticsearch native-user password used by
+// Kibana proxy sessions. It is stable for the same gateway secret and username
+// so concurrent browser sessions for one user keep sharing valid credentials.
+func (g *Gateway) internalUserPassword(username string) string {
+	mac := hmac.New(sha256.New, g.passwordSecret)
+	_, _ = mac.Write([]byte("elasticgateway internal user password\x00"))
+	_, _ = mac.Write([]byte(strings.TrimSpace(username)))
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
 }
 
 // ForwardedProto reports the direct request scheme for proxy headers.

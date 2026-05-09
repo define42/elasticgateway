@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"html/template"
 	"log/slog"
@@ -154,6 +155,56 @@ func TestSessionCookieMaxAgeHonorsSessionTTL(t *testing.T) {
 	maxAge := reflect.ValueOf(gateway.SecureCookie).Elem().FieldByName("maxAge").Int()
 	if maxAge != 5400 {
 		t.Fatalf("expected securecookie max age 5400 seconds, got %d", maxAge)
+	}
+}
+
+func TestInternalUserPasswordDerivation(t *testing.T) {
+	first := New(elasticpkg.NewClient(appconfig.Config{SessionSecret: "shared-secret-for-passwords"}), nil)
+	second := New(elasticpkg.NewClient(appconfig.Config{SessionSecret: "shared-secret-for-passwords"}), nil)
+	otherSecret := New(elasticpkg.NewClient(appconfig.Config{SessionSecret: "different-secret-for-passwords"}), nil)
+
+	alicePassword := first.internalUserPassword("alice")
+	if alicePassword == "" {
+		t.Fatal("expected derived password")
+	}
+	if got := second.internalUserPassword("alice"); got != alicePassword {
+		t.Fatalf("same secret and username should derive the same password: %q != %q", got, alicePassword)
+	}
+	if got := first.internalUserPassword(" alice "); got != alicePassword {
+		t.Fatalf("submitted username should be trimmed before derivation: %q != %q", got, alicePassword)
+	}
+	if got := first.internalUserPassword("bob"); got == alicePassword {
+		t.Fatal("different usernames should derive different passwords")
+	}
+	if got := otherSecret.internalUserPassword("alice"); got == alicePassword {
+		t.Fatal("different session secrets should derive different passwords")
+	}
+
+	fallback := New(elasticpkg.NewClient(appconfig.Config{}), nil)
+	if got, want := fallback.internalUserPassword("alice"), fallback.internalUserPassword("alice"); got != want {
+		t.Fatalf("process fallback secret should be stable inside one gateway: %q != %q", got, want)
+	}
+}
+
+func TestLoginUsesStableInternalPasswordForConcurrentSessions(t *testing.T) {
+	gateway, userPasswords := newStablePasswordLoginGateway(t)
+
+	var sessionPasswords []string
+	for range 2 {
+		sessionPasswords = append(sessionPasswords, loginSessionPassword(t, gateway))
+	}
+
+	if len(*userPasswords) != 2 || len(sessionPasswords) != 2 {
+		t.Fatalf("expected two login passwords and session passwords, got %#v / %#v", *userPasswords, sessionPasswords)
+	}
+	if (*userPasswords)[0] != (*userPasswords)[1] {
+		t.Fatalf("native-user password rotated across logins: %q != %q", (*userPasswords)[0], (*userPasswords)[1])
+	}
+	if sessionPasswords[0] != sessionPasswords[1] {
+		t.Fatalf("session AuthHeader password changed across logins: %q != %q", sessionPasswords[0], sessionPasswords[1])
+	}
+	if sessionPasswords[0] != (*userPasswords)[0] {
+		t.Fatalf("session password and native-user password diverged: %q != %q", sessionPasswords[0], (*userPasswords)[0])
 	}
 }
 
@@ -444,4 +495,93 @@ func findTestCookie(t *testing.T, cookies []*http.Cookie, name string) *http.Coo
 	}
 	t.Fatalf("cookie %q not found in %#v", name, cookies)
 	return nil
+}
+
+func decodeTestJSONBody(t *testing.T, r *http.Request) map[string]any {
+	t.Helper()
+
+	var body map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		t.Fatalf("decode request body: %v", err)
+	}
+	return body
+}
+
+func newStablePasswordLoginGateway(t *testing.T) (*Gateway, *[]string) {
+	t.Helper()
+
+	var userPasswords []string
+	elasticSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /_security/user/alice":
+			http.NotFound(w, r)
+		case "PUT /_security/role/gateway_team1_user":
+			w.WriteHeader(http.StatusOK)
+		case "PUT /_security/user/alice":
+			body := decodeTestJSONBody(t, r)
+			password, ok := body["password"].(string)
+			if !ok || password == "" {
+				t.Fatalf("expected native-user password, got %#v", body["password"])
+			}
+			userPasswords = append(userPasswords, password)
+			w.WriteHeader(http.StatusCreated)
+		default:
+			t.Fatalf("unexpected Elasticsearch request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	t.Cleanup(elasticSearch.Close)
+
+	gateway := New(elasticpkg.NewClient(appconfig.Config{
+		ElasticsearchURL: elasticSearch.URL,
+		HTTPClient:       elasticSearch.Client(),
+		SessionSecret:    "shared-session-secret-for-login-passwords",
+	}), func(username, _ string) (*authz.User, []authz.Access, error) {
+		return &authz.User{Name: username}, []authz.Access{
+			{Group: "team1_user", Namespace: "team1", PullOnly: true},
+		}, nil
+	})
+	return gateway, &userPasswords
+}
+
+func loginSessionPassword(t *testing.T, gateway *Gateway) string {
+	t.Helper()
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=alice&password=dogood"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	gateway.Handler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusSeeOther {
+		t.Fatalf("expected status 303, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+
+	cookie := findTestCookie(t, recorder.Result().Cookies(), SessionCookieName)
+	sessionData, err := gateway.decodeSessionCookieValue(cookie.Value)
+	if err != nil {
+		t.Fatalf("decode session cookie: %v", err)
+	}
+	username, password := decodeBasicAuthHeader(t, sessionData.AuthHeader)
+	if username != "alice" {
+		t.Fatalf("expected session Basic auth username alice, got %q", username)
+	}
+	return password
+}
+
+func decodeBasicAuthHeader(t *testing.T, header string) (string, string) {
+	t.Helper()
+
+	const prefix = "Basic "
+	if !strings.HasPrefix(header, prefix) {
+		t.Fatalf("expected Basic auth header, got %q", header)
+	}
+	decoded, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(header, prefix))
+	if err != nil {
+		t.Fatalf("decode Basic auth header: %v", err)
+	}
+	parts := strings.SplitN(string(decoded), ":", 2)
+	if len(parts) != 2 {
+		t.Fatalf("expected Basic auth username and password, got %q", decoded)
+	}
+	return parts[0], parts[1]
 }

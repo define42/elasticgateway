@@ -3,7 +3,6 @@ package main
 
 import (
 	"context"
-	cryptorand "crypto/rand"
 	"crypto/tls"
 	"errors"
 	"io"
@@ -217,42 +216,6 @@ func TestHandleLoginSubmitCoverage(t *testing.T) {
 		}
 		if !strings.Contains(recorder.Body.String(), "failed to read login form") {
 			t.Fatalf("expected parse-form error page, got %q", recorder.Body.String())
-		}
-	})
-
-	t.Run("password generation failure returns login error page", func(t *testing.T) {
-		oldReader := cryptorand.Reader
-		cryptorand.Reader = errorReader{err: errors.New("entropy unavailable")}
-		defer func() {
-			cryptorand.Reader = oldReader
-		}()
-
-		elasticSearch := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-			t.Fatalf("unexpected Elasticsearch request: %s %s", r.Method, r.URL.Path)
-		}))
-		defer elasticSearch.Close()
-
-		kibana := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
-			t.Fatalf("unexpected Kibana request: %s %s", r.Method, r.URL.RequestURI())
-		}))
-		defer kibana.Close()
-
-		gateway := testGatewayHandlerWithAuth(testConfigWithKibana(elasticSearch, kibana), func(username, _ string) (*authzpkg.User, []authzpkg.Access, error) {
-			return &authzpkg.User{Name: username, Namespace: "team1"}, []authzpkg.Access{
-				{Group: "team1_rw", Namespace: "team1"},
-			}, nil
-		})
-
-		recorder := httptest.NewRecorder()
-		request := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader("username=testuser&password=dogood"))
-		request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-		gateway.ServeHTTP(recorder, request)
-
-		if recorder.Code != http.StatusBadGateway {
-			t.Fatalf("expected status 502, got %d: %s", recorder.Code, recorder.Body.String())
-		}
-		if !strings.Contains(recorder.Body.String(), "failed to allocate session credentials") {
-			t.Fatalf("expected password-generation failure page, got %q", recorder.Body.String())
 		}
 	})
 }

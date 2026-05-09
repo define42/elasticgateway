@@ -14,8 +14,9 @@ import (
 // ProvisionLoginUser ensures roles, spaces, data views, and the native user.
 //
 // internalUserPassword is the password to set on the Elasticsearch native user
-// for username. It is NOT the caller's LDAP password: the gateway mints a fresh
-// random value per login so the LDAP credential never reaches Elasticsearch.
+// for username. It is NOT the caller's LDAP password: the gateway derives an
+// internal value from its session secret and the submitted username so the LDAP
+// credential never reaches Elasticsearch.
 func (c *Client) ProvisionLoginUser(ctx context.Context, username, internalUserPassword string, access []authz.Access) error {
 	effective := authz.NormalizeAccessByNamespace(access)
 	if len(effective) == 0 {
