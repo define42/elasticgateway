@@ -36,8 +36,11 @@ type Session struct {
 	AuthHeader string
 }
 
-// SessionCookieName is the cookie that carries the gateway session token.
-const SessionCookieName = "elasticgateway_session"
+const (
+	// SessionCookieName is the cookie that carries the gateway session token.
+	SessionCookieName = "elasticgateway_session"
+	kibanaBasePath    = "/kibana"
+)
 
 var (
 	errIngestAuthRequired = errors.New("ingest authentication required")
@@ -149,8 +152,8 @@ func (g *Gateway) Handler() *http.ServeMux {
 	mux.HandleFunc("/", g.handleRoot)
 	mux.HandleFunc("/login", g.handleLogin)
 	mux.HandleFunc("/logout", g.handleLogout)
-	mux.HandleFunc("/kibana", g.HandleKibana)
-	mux.HandleFunc("/kibana/", g.HandleKibana)
+	mux.HandleFunc(kibanaBasePath, g.HandleKibana)
+	mux.HandleFunc(kibanaBasePath+"/", g.HandleKibana)
 	mux.HandleFunc("/demo", g.handleDemo)
 	mux.HandleFunc("/ingest", g.handleIngest)
 	mux.HandleFunc("/ingest/", g.handleIngest)
@@ -217,7 +220,7 @@ func (g *Gateway) handleLogout(w http.ResponseWriter, r *http.Request) {
 
 // HandleKibana proxies authenticated requests to Kibana.
 func (g *Gateway) HandleKibana(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/kibana" && !strings.HasPrefix(r.URL.Path, "/kibana/") {
+	if r.URL.Path != kibanaBasePath && !strings.HasPrefix(r.URL.Path, kibanaBasePath+"/") {
 		http.NotFound(w, r)
 		return
 	}
@@ -257,10 +260,10 @@ func (g *Gateway) handleKibanaLogout(w http.ResponseWriter, r *http.Request) {
 func isKibanaLogoutPath(path string) bool {
 	path = strings.TrimSuffix(path, "/")
 	switch path {
-	case "/kibana/auth/logout", "/kibana/logout", "/kibana/api/security/logout", "/kibana/security/logout":
+	case kibanaBasePath + "/auth/logout", kibanaBasePath + "/logout", kibanaBasePath + "/api/security/logout", kibanaBasePath + "/security/logout":
 		return true
 	default:
-		return strings.HasPrefix(path, "/kibana/s/") &&
+		return strings.HasPrefix(path, kibanaBasePath+"/s/") &&
 			(strings.HasSuffix(path, "/auth/logout") ||
 				strings.HasSuffix(path, "/logout") ||
 				strings.HasSuffix(path, "/api/security/logout") ||
@@ -729,9 +732,9 @@ func ForwardedProto(r *http.Request) string {
 func kibanaLandingPath(access []authz.Access) string {
 	effective := authz.NormalizeAccessByNamespace(access)
 	if len(effective) == 0 || strings.TrimSpace(effective[0].Namespace) == "" {
-		return "/kibana/app/home"
+		return kibanaBasePath + "/app/home"
 	}
-	return "/kibana/s/" + url.PathEscape(effective[0].Namespace) + "/app/home"
+	return kibanaBasePath + "/s/" + url.PathEscape(effective[0].Namespace) + "/app/home"
 }
 
 func writeJSON(w http.ResponseWriter, status int, body any) {

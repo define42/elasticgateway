@@ -16,8 +16,6 @@ const (
 	DefaultElasticsearchURL = "https://localhost:9200"
 	// DefaultKibanaURL is the default Kibana endpoint.
 	DefaultKibanaURL = "http://localhost:5601"
-	// DefaultKibanaBasePath is the proxied Kibana base path.
-	DefaultKibanaBasePath = "/kibana"
 	// DefaultUsername is the default upstream admin username.
 	DefaultUsername = "elastic"
 )
@@ -30,7 +28,6 @@ type Config struct {
 	KibanaURL             string
 	KibanaUsername        string
 	KibanaPassword        string
-	KibanaBasePath        string
 	SessionSecret         string
 	ListenAddr            string
 	Shards                int
@@ -74,7 +71,6 @@ func LoadGateway() Config {
 		KibanaURL:             getEnv("KIBANA_URL", DefaultKibanaURL),
 		KibanaUsername:        getEnv("KIBANA_USERNAME", getEnv("ELASTICSEARCH_USERNAME", DefaultUsername)),
 		KibanaPassword:        getEnv("KIBANA_PASSWORD", getEnv("ELASTICSEARCH_PASSWORD", defaultPassword)),
-		KibanaBasePath:        normalizeBasePath(getEnv("KIBANA_BASE_PATH", DefaultKibanaBasePath)),
 		SessionSecret:         getEnv("SESSION_SECRET", ""),
 		ListenAddr:            getEnv("LISTEN_ADDR", DefaultListenAddr),
 		Shards:                1,
@@ -110,13 +106,4 @@ func getEnvBool(key string, def bool) bool {
 		return value == "1" || value == "true" || value == "yes"
 	}
 	return def
-}
-
-func normalizeBasePath(path string) string {
-	path = strings.TrimSpace(path)
-	if path == "" || path == "/" {
-		return ""
-	}
-	path = "/" + strings.Trim(path, "/")
-	return path
 }

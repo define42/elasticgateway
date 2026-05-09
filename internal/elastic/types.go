@@ -196,9 +196,6 @@ func NewClient(cfg config.Config) *Client {
 }
 
 func normalizeConfig(cfg config.Config) config.Config {
-	if cfg.KibanaBasePath == "" {
-		cfg.KibanaBasePath = config.DefaultKibanaBasePath
-	}
 	if cfg.HTTPClient == nil {
 		cfg.HTTPClient = config.DefaultHTTPClient()
 	}

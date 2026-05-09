@@ -89,7 +89,7 @@ func (c *Client) NewKibanaRequestForSpace(ctx context.Context, spaceName, method
 	headers := map[string]string{
 		"kbn-xsrf": "true",
 	}
-	return c.NewRequestForBase(ctx, c.Config.KibanaURL, method, KibanaAPIPathForSpace("", spaceName, path), body, c.Config.KibanaUsername, c.Config.KibanaPassword, headers)
+	return c.NewRequestForBase(ctx, c.Config.KibanaURL, method, KibanaAPIPathForSpace(spaceName, path), body, c.Config.KibanaUsername, c.Config.KibanaPassword, headers)
 }
 
 // NewRequestForBase builds an authenticated request against baseURL.

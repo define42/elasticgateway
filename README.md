@@ -124,7 +124,6 @@ Configuration is environment based.
 | `KIBANA_URL` | `http://localhost:5601` | Kibana API URL |
 | `KIBANA_USERNAME` | `ELASTICSEARCH_USERNAME` or `elastic` | Kibana API username |
 | `KIBANA_PASSWORD` | `ELASTICSEARCH_PASSWORD` or `ELASTIC_PASSWORD` or empty | Kibana API password |
-| `KIBANA_BASE_PATH` | `/kibana` | Proxied Kibana base path |
 | `SESSION_SECRET` | generated at process start | Shared secret used to sign and encrypt gateway session cookies |
 | `LDAP_URL` | `ldaps://ldap:389` | LDAP server URL |
 | `LDAP_BASE_DN` | `dc=glauth,dc=com` | LDAP search base |
@@ -210,8 +209,10 @@ curl -i http://localhost:8080/ingest/team10-hello/_bulk \
   --data-binary @- <<'NDJSON'
 {"index":{"_id":"hello-1"}}
 {"event_time":"2024-12-30T10:11:12Z","message":"hello from bulk"}
-{"create":{"_id":"hello-2"}}
+{"create":{"_id":"hello-3"}}
 {"event_time":"2024-12-31T00:00:00Z","message":"another rollover day"}
+{ "index": {} }
+{ "event_time": "2026-05-09T12:00:00Z", "sku": "A-002", "name": "Nut", "price": 0.49 }
 NDJSON
 ```
 
@@ -224,7 +225,6 @@ export ELASTICSEARCH_PASSWORD='Cedar7!FluxOrbit29'
 export KIBANA_URL=http://localhost:5601
 export KIBANA_USERNAME=elastic
 export KIBANA_PASSWORD='Cedar7!FluxOrbit29'
-export KIBANA_BASE_PATH=/kibana
 export LDAP_URL=ldaps://localhost:1389
 export LISTEN_ADDR=:8080
 

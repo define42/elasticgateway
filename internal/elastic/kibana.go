@@ -153,32 +153,14 @@ func KibanaAPIPath(path string) string {
 	return "/" + strings.TrimLeft(path, "/")
 }
 
-// KibanaAPIPathWithBase ensures path is rooted under basePath.
-func KibanaAPIPathWithBase(basePath, path string) string {
-	basePath = normalizeKibanaBasePath(basePath)
-	path = "/" + strings.TrimLeft(path, "/")
-	if basePath != "" && (path == basePath || strings.HasPrefix(path, basePath+"/")) {
+// KibanaAPIPathForSpace ensures an API path targets a Kibana space.
+func KibanaAPIPathForSpace(spaceName, path string) string {
+	path = KibanaAPIPath(path)
+	if strings.TrimSpace(spaceName) == "" {
 		return path
 	}
-	return basePath + path
-}
-
-// KibanaAPIPathForSpace ensures an API path targets a Kibana space.
-func KibanaAPIPathForSpace(basePath, spaceName, path string) string {
-	if strings.TrimSpace(spaceName) == "" {
-		return KibanaAPIPathWithBase(basePath, path)
-	}
-	path = "/" + strings.TrimLeft(path, "/")
 	if strings.HasPrefix(path, "/s/") {
-		return KibanaAPIPathWithBase(basePath, path)
+		return path
 	}
-	return KibanaAPIPathWithBase(basePath, "/s/"+url.PathEscape(spaceName)+path)
-}
-
-func normalizeKibanaBasePath(path string) string {
-	path = strings.TrimSpace(path)
-	if path == "" || path == "/" {
-		return ""
-	}
-	return "/" + strings.Trim(path, "/")
+	return "/s/" + url.PathEscape(spaceName) + path
 }
