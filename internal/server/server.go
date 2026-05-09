@@ -3,6 +3,7 @@ package server
 
 import (
 	"bytes"
+	"crypto/hkdf"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
@@ -24,7 +25,6 @@ import (
 	"github.com/define42/elasticgateway/internal/ingest"
 	ldappkg "github.com/define42/elasticgateway/internal/ldap"
 	"github.com/gorilla/securecookie"
-	"golang.org/x/crypto/hkdf"
 )
 
 // Session is the value carried inside the encrypted session cookie. It holds
@@ -176,14 +176,14 @@ func deriveSessionKeys(sessionSecret string) ([]byte, []byte) {
 		blockKeyBytes = 32
 	)
 
-	keys := make([]byte, hashKeyBytes+blockKeyBytes)
-	keyStream := hkdf.New(
+	keys, err := hkdf.Key(
 		sha256.New,
 		[]byte(sessionSecret),
 		nil,
-		[]byte("elasticgateway session cookie keys"),
+		"elasticgateway session cookie keys",
+		hashKeyBytes+blockKeyBytes,
 	)
-	if _, err := io.ReadFull(keyStream, keys); err != nil {
+	if err != nil {
 		panic(fmt.Sprintf("derive session cookie keys: %v", err))
 	}
 

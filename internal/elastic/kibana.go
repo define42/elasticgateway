@@ -19,24 +19,43 @@ func (c *Client) EnsureSpace(ctx context.Context, spaceName string) error {
 	}
 
 	path := "/api/spaces/space/" + url.PathEscape(spaceName)
-	err := c.DoKibanaJSON(ctx, http.MethodGet, path, nil, nil, []int{http.StatusOK})
-	if err != nil {
-		if !IsNotFoundResponse(err) {
-			return err
-		}
-
-		body := SpaceRequest{
-			ID:               spaceName,
-			Name:             spaceName,
-			Description:      fmt.Sprintf("Gateway space for %s", spaceName),
-			DisabledFeatures: []string{},
-		}
-		if err := c.DoKibanaJSON(ctx, http.MethodPost, "/api/spaces/space", body, nil, []int{http.StatusOK, http.StatusCreated}); err != nil {
-			return err
-		}
+	if err := c.ensureSpaceExists(ctx, spaceName, path); err != nil {
+		return err
 	}
 
 	c.EnsuredSpaces.Store(spaceName, true)
+	return nil
+}
+
+func (c *Client) ensureSpaceExists(ctx context.Context, spaceName, path string) error {
+	err := c.DoKibanaJSON(ctx, http.MethodGet, path, nil, nil, []int{http.StatusOK})
+	if err == nil {
+		return nil
+	}
+	if !IsNotFoundResponse(err) {
+		return err
+	}
+
+	return c.createMissingSpace(ctx, spaceName, path)
+}
+
+func (c *Client) createMissingSpace(ctx context.Context, spaceName, path string) error {
+	body := SpaceRequest{
+		ID:               spaceName,
+		Name:             spaceName,
+		Description:      fmt.Sprintf("Gateway space for %s", spaceName),
+		DisabledFeatures: []string{},
+	}
+	err := c.DoKibanaJSON(ctx, http.MethodPost, "/api/spaces/space", body, nil, []int{http.StatusOK, http.StatusCreated})
+	if err == nil {
+		return nil
+	}
+	if !IsConflictResponse(err) {
+		return err
+	}
+	if err := c.DoKibanaJSON(ctx, http.MethodGet, path, nil, nil, []int{http.StatusOK}); err != nil {
+		return fmt.Errorf("confirm Kibana space %q after create conflict: %w", spaceName, err)
+	}
 	return nil
 }
 

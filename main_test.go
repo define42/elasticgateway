@@ -257,6 +257,55 @@ func TestEnsureSpaceCreatesWhenMissing(t *testing.T) {
 	}
 }
 
+func TestEnsureSpaceConfirmsCreateConflict(t *testing.T) {
+	t.Parallel()
+
+	steps := []struct {
+		method string
+		path   string
+		status int
+		body   string
+	}{
+		{method: http.MethodGet, path: "/api/spaces/space/orders", status: http.StatusNotFound},
+		{method: http.MethodPost, path: "/api/spaces/space", status: http.StatusConflict, body: `{"error":"space already exists"}`},
+		{method: http.MethodGet, path: "/api/spaces/space/orders", status: http.StatusOK, body: `{"id":"orders","name":"orders"}`},
+	}
+	var calls []string
+	kibana := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if len(calls) >= len(steps) {
+			t.Fatalf("unexpected extra request: %s %s", r.Method, r.URL.Path)
+		}
+		step := steps[len(calls)]
+		calls = append(calls, r.Method+" "+r.URL.Path)
+
+		if r.Method != step.method || r.URL.Path != step.path {
+			t.Fatalf("unexpected request: got %s %s, want %s %s", r.Method, r.URL.Path, step.method, step.path)
+		}
+		w.WriteHeader(step.status)
+		_, _ = io.WriteString(w, step.body)
+	}))
+	defer kibana.Close()
+
+	client := elasticpkg.NewClient(appconfig.Config{KibanaURL: kibana.URL, HTTPClient: kibana.Client()})
+	if err := client.EnsureSpace(context.Background(), "orders"); err != nil {
+		t.Fatalf("EnsureSpace returned error: %v", err)
+	}
+	if _, ok := client.EnsuredSpaces.Load("orders"); !ok {
+		t.Fatal("expected ensured space to be cached after conflict confirmation")
+	}
+	if err := client.EnsureSpace(context.Background(), "orders"); err != nil {
+		t.Fatalf("cached EnsureSpace returned error: %v", err)
+	}
+
+	if !reflect.DeepEqual(calls, []string{
+		"GET /api/spaces/space/orders",
+		"POST /api/spaces/space",
+		"GET /api/spaces/space/orders",
+	}) {
+		t.Fatalf("unexpected request sequence: %#v", calls)
+	}
+}
+
 func TestEnsureSpaceSkipsWhenExisting(t *testing.T) {
 	t.Parallel()
 

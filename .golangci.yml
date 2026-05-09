@@ -5,6 +5,7 @@ linters:
   enable:
     - unused
     - revive
+    - bodyclose
     - gocritic
     - errorlint
     - nolintlint

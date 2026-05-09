@@ -266,3 +266,9 @@ func IsNotFoundResponse(err error) bool {
 	var responseErr *ResponseError
 	return errors.As(err, &responseErr) && responseErr.StatusCode == http.StatusNotFound
 }
+
+// IsConflictResponse reports whether err is an upstream HTTP 409 response.
+func IsConflictResponse(err error) bool {
+	var responseErr *ResponseError
+	return errors.As(err, &responseErr) && responseErr.StatusCode == http.StatusConflict
+}
