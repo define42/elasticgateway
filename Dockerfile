@@ -22,14 +22,14 @@ RUN go build -o elasticgateway
 
 
 # ---------- runtime stage ----------
-FROM scratch
+FROM gcr.io/distroless/static:nonroot
 
 WORKDIR /app
 
 # Copy binary
 COPY --from=builder /app/elasticgateway /app/elasticgateway
 
-# TLS certs will be mounted
+# Mount ROOT_CA only when endpoints use a private certificate authority.
 EXPOSE 8080
 
 
