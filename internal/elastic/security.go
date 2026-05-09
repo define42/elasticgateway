@@ -119,17 +119,25 @@ func RoleRequestForAccess(access authz.Access) KibanaRoleRequest {
 func kibanaPrivilegesForMode(mode string) ([]string, map[string][]string) {
 	switch mode {
 	case "r":
-		return []string{"read"}, map[string][]string{}
+		return []string{}, map[string][]string{
+			"dashboard_v2": {"read"},
+			"discover_v2":  {"read"},
+			"visualize_v2": {"read"},
+		}
 	case "re":
 		return []string{}, map[string][]string{
 			"dashboard_v2": {"all"},
-			"discover_v2":  {"read"},
+			"discover_v2":  {"all"},
 			"visualize_v2": {"all"},
 		}
 	case "rw", "rd", "rwd":
 		return []string{"all"}, map[string][]string{}
 	default:
-		return []string{"read"}, map[string][]string{}
+		return []string{}, map[string][]string{
+			"dashboard_v2": {"read"},
+			"discover_v2":  {"read"},
+			"visualize_v2": {"read"},
+		}
 	}
 }
 

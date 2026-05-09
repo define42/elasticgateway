@@ -898,7 +898,11 @@ func TestRoleRequestForAccessModes(t *testing.T) {
 		wantBase    []string
 		wantFeature map[string][]string
 	}{
-		{name: "read", access: authzpkg.Access{Namespace: "team1", PullOnly: true}, wantAllowed: []string{"read", "view_index_metadata"}, wantBase: []string{"read"}, wantFeature: map[string][]string{}},
+		{name: "read", access: authzpkg.Access{Namespace: "team1", PullOnly: true}, wantAllowed: []string{"read", "view_index_metadata"}, wantBase: []string{}, wantFeature: map[string][]string{
+			"dashboard_v2": {"read"},
+			"discover_v2":  {"read"},
+			"visualize_v2": {"read"},
+		}},
 		{name: "read edit", access: authzpkg.Access{Namespace: "team1", PullOnly: true, DashboardEdit: true}, wantAllowed: []string{"read", "view_index_metadata"}, wantBase: []string{}, wantFeature: map[string][]string{
 			"dashboard_v2": {"all"},
 			"discover_v2":  {"read"},
