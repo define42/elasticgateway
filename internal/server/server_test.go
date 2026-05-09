@@ -5,8 +5,10 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -19,6 +21,8 @@ import (
 	"github.com/define42/elasticgateway/internal/authz"
 	appconfig "github.com/define42/elasticgateway/internal/config"
 	elasticpkg "github.com/define42/elasticgateway/internal/elastic"
+	"github.com/define42/elasticgateway/internal/ingest"
+	ldappkg "github.com/define42/elasticgateway/internal/ldap"
 )
 
 func TestSessionFormattingAndLoggingRedactsAuthHeader(t *testing.T) {
@@ -998,6 +1002,479 @@ func TestDecodeIngestDocumentsReturnRequestEntityTooLargeAfterReadingPastLimit(t
 			}
 		})
 	}
+}
+
+func TestGatewayIngestRequestPath(t *testing.T) {
+	tests := []struct {
+		path string
+		want string
+	}{
+		{path: "/elasticgateway/ingest", want: "/ingest"},
+		{path: "/elasticgateway/ingest/orders/_bulk", want: "/ingest/orders/_bulk"},
+		{path: "/other", want: "/other"},
+	}
+
+	for _, tt := range tests {
+		if got := gatewayIngestRequestPath(tt.path); got != tt.want {
+			t.Fatalf("gatewayIngestRequestPath(%q) = %q, want %q", tt.path, got, tt.want)
+		}
+	}
+}
+
+func TestBulkIngestRejectsBadPathAndMethod(t *testing.T) {
+	gateway := New(elasticpkg.NewClient(appconfig.Config{}), nil)
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		status int
+		allow  string
+	}{
+		{
+			name:   "bad bulk path",
+			method: http.MethodPost,
+			path:   "/elasticgateway/ingest/_bulk",
+			status: http.StatusBadRequest,
+		},
+		{
+			name:   "wrong method",
+			method: http.MethodGet,
+			path:   "/elasticgateway/ingest/team1-demo/_bulk",
+			status: http.StatusMethodNotAllowed,
+			allow:  http.MethodPost,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(tt.method, tt.path, nil)
+
+			gateway.Handler().ServeHTTP(recorder, request)
+
+			if recorder.Code != tt.status {
+				t.Fatalf("expected status %d, got %d: %s", tt.status, recorder.Code, recorder.Body.String())
+			}
+			if got := recorder.Header().Get("Allow"); got != tt.allow {
+				t.Fatalf("unexpected Allow header: got %q want %q", got, tt.allow)
+			}
+		})
+	}
+}
+
+func TestBulkIngestAuthorizationAndDecodeErrors(t *testing.T) {
+	t.Run("auth required", func(t *testing.T) {
+		gateway := New(elasticpkg.NewClient(appconfig.Config{}), nil)
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/elasticgateway/ingest/team1-demo/_bulk", strings.NewReader(testBulkBody()))
+		request.Header.Set("Content-Type", "application/x-ndjson")
+
+		gateway.Handler().ServeHTTP(recorder, request)
+
+		if recorder.Code != http.StatusUnauthorized {
+			t.Fatalf("expected status 401, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+		if got := recorder.Header().Get("WWW-Authenticate"); got == "" {
+			t.Fatal("expected WWW-Authenticate header")
+		}
+	})
+
+	t.Run("bad content type after auth", func(t *testing.T) {
+		gateway := newAuthorizedBulkTestGateway(appconfig.Config{})
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/elasticgateway/ingest/team1-demo/_bulk", strings.NewReader(testBulkBody()))
+		request.Header.Set("Content-Type", "application/json")
+		request.SetBasicAuth("alice", "secret")
+
+		gateway.Handler().ServeHTTP(recorder, request)
+
+		if recorder.Code != http.StatusUnsupportedMediaType {
+			t.Fatalf("expected status 415, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+	})
+}
+
+func TestBulkIngestUpstreamSetupAndBootstrapErrors(t *testing.T) {
+	t.Run("kibana setup failure", func(t *testing.T) {
+		kibana := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet || r.URL.Path != "/api/spaces/space/team1" {
+				t.Fatalf("unexpected Kibana request: %s %s", r.Method, r.URL.Path)
+			}
+			http.Error(w, `{"error":"space failed"}`, http.StatusInternalServerError)
+		}))
+		defer kibana.Close()
+
+		gateway := newAuthorizedBulkTestGateway(appconfig.Config{
+			KibanaURL:  kibana.URL,
+			HTTPClient: kibana.Client(),
+		})
+		recorder := httptest.NewRecorder()
+		request := newAuthorizedBulkRequest()
+
+		gateway.Handler().ServeHTTP(recorder, request)
+
+		if recorder.Code != http.StatusBadGateway {
+			t.Fatalf("expected status 502, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+	})
+
+	t.Run("alias bootstrap failure", func(t *testing.T) {
+		elasticSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodHead || r.URL.Path != "/_alias/team1-demo-20241230-rollover" {
+				t.Fatalf("unexpected Elasticsearch request: %s %s", r.Method, r.URL.Path)
+			}
+			http.Error(w, `{"error":"alias failed"}`, http.StatusInternalServerError)
+		}))
+		defer elasticSearch.Close()
+
+		gateway := newAuthorizedBulkTestGateway(appconfig.Config{
+			ElasticsearchURL: elasticSearch.URL,
+			HTTPClient:       elasticSearch.Client(),
+		})
+		recorder := httptest.NewRecorder()
+		request := newAuthorizedBulkRequest()
+
+		gateway.Handler().ServeHTTP(recorder, request)
+
+		if recorder.Code != http.StatusBadGateway {
+			t.Fatalf("expected status 502, got %d: %s", recorder.Code, recorder.Body.String())
+		}
+	})
+}
+
+func TestLoginAndLogoutGuardBranches(t *testing.T) {
+	gateway := New(elasticpkg.NewClient(appconfig.Config{}), nil)
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		status int
+		allow  string
+	}{
+		{name: "login path not found", method: http.MethodGet, path: "/elasticgateway/login/nope", status: http.StatusNotFound},
+		{name: "logout path not found", method: http.MethodPost, path: "/elasticgateway/logout/nope", status: http.StatusNotFound},
+		{name: "login wrong method", method: http.MethodPut, path: "/elasticgateway/login", status: http.StatusMethodNotAllowed, allow: http.MethodGet + ", " + http.MethodPost},
+		{name: "kibana logout wrong method", method: http.MethodPut, path: "/api/security/logout", status: http.StatusMethodNotAllowed, allow: http.MethodGet + ", " + http.MethodPost},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(tt.method, tt.path, nil)
+
+			if strings.Contains(tt.name, "kibana") {
+				gateway.handleKibanaLogout(recorder, request)
+			} else {
+				gateway.Handler().ServeHTTP(recorder, request)
+			}
+
+			if recorder.Code != tt.status {
+				t.Fatalf("expected status %d, got %d: %s", tt.status, recorder.Code, recorder.Body.String())
+			}
+			if got := recorder.Header().Get("Allow"); got != tt.allow {
+				t.Fatalf("unexpected Allow header: got %q want %q", got, tt.allow)
+			}
+		})
+	}
+}
+
+func TestDirectHandlerPathGuards(t *testing.T) {
+	gateway := New(elasticpkg.NewClient(appconfig.Config{}), nil)
+
+	tests := []struct {
+		name   string
+		path   string
+		handle func(http.ResponseWriter, *http.Request)
+	}{
+		{name: "login", path: "/elasticgateway/login/nope", handle: gateway.handleLogin},
+		{name: "logout", path: "/elasticgateway/logout/nope", handle: gateway.handleLogout},
+		{name: "demo", path: "/elasticgateway/demo/nope", handle: gateway.handleDemo},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodGet, tt.path, nil)
+
+			tt.handle(recorder, request)
+
+			if recorder.Code != http.StatusNotFound {
+				t.Fatalf("expected status 404, got %d: %s", recorder.Code, recorder.Body.String())
+			}
+		})
+	}
+}
+
+func TestLoginSubmitRejectsMissingCredentials(t *testing.T) {
+	gateway := New(elasticpkg.NewClient(appconfig.Config{}), nil)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/login", strings.NewReader("username=alice&password="))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	gateway.Handler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnauthorized {
+		t.Fatalf("expected status 401, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "username and password are required") {
+		t.Fatalf("expected missing-credentials page, got %q", recorder.Body.String())
+	}
+}
+
+func TestLoginSubmitSessionCookieEncodeFailure(t *testing.T) {
+	elasticSearch := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /_security/user/alice":
+			http.NotFound(w, r)
+		case "PUT /_security/role/gateway_team1_user":
+			w.WriteHeader(http.StatusOK)
+		case "PUT /_security/user/alice":
+			w.WriteHeader(http.StatusCreated)
+		default:
+			t.Fatalf("unexpected Elasticsearch request: %s %s", r.Method, r.URL.Path)
+		}
+	}))
+	defer elasticSearch.Close()
+
+	gateway := New(elasticpkg.NewClient(appconfig.Config{
+		ElasticsearchURL: elasticSearch.URL,
+		HTTPClient:       elasticSearch.Client(),
+	}), func(username, _ string) (*authz.User, []authz.Access, error) {
+		return &authz.User{Name: username}, []authz.Access{
+			{Group: "team1_user", Namespace: "team1", PullOnly: true},
+		}, nil
+	})
+	gateway.SecureCookie.MaxLength(1)
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/login", strings.NewReader("username=alice&password=secret"))
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	gateway.Handler().ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status 500, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestSessionAndLoginHelperBranches(t *testing.T) {
+	if got := redactedAuthHeader(""); got != "" {
+		t.Fatalf("empty auth header should stay empty, got %q", got)
+	}
+	if hasSessionCookie(nil) {
+		t.Fatal("nil request should not have a session cookie")
+	}
+	if got := sessionCookieMaxAgeSeconds(1500 * time.Millisecond); got != 2 {
+		t.Fatalf("fractional session TTL should round up, got %d", got)
+	}
+	if got := loginLogUsername(" submitted ", &authz.User{Name: "  "}); got != "submitted" {
+		t.Fatalf("expected submitted username fallback, got %q", got)
+	}
+	if got := loginNextForRequest(nil); got != "/" {
+		t.Fatalf("nil request next should be root, got %q", got)
+	}
+	if got := loginNextFromQuery(nil); got != "/" {
+		t.Fatalf("nil request query next should be root, got %q", got)
+	}
+	if got := sanitizeLoginNext("/\x00bad"); got != "/" {
+		t.Fatalf("control-character next should be sanitized, got %q", got)
+	}
+}
+
+func TestSetSessionCookieEncodeFailureWritesServerError(t *testing.T) {
+	gateway := New(elasticpkg.NewClient(appconfig.Config{}), nil)
+	gateway.SecureCookie.MaxLength(1)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/login", nil)
+
+	err := gateway.setSessionCookie(recorder, request, Session{User: &authz.User{Name: "alice"}})
+
+	if err == nil {
+		t.Fatal("expected session cookie encode error")
+	}
+	if recorder.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status 500, got %d: %s", recorder.Code, recorder.Body.String())
+	}
+}
+
+//nolint:cyclop,funlen,gocognit // Subtests keep proxy helper branch coverage close to the helper code.
+func TestProxyHelperBranches(t *testing.T) {
+	t.Run("timeout round tripper without timeout", func(t *testing.T) {
+		transport := timeoutRoundTripper{
+			base: serverRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusNoContent,
+					Header:     make(http.Header),
+					Request:    r,
+				}, nil
+			}),
+		}
+		request := httptest.NewRequest(http.MethodGet, "http://example.com", nil)
+
+		response, err := transport.RoundTrip(request)
+		if err != nil {
+			t.Fatalf("RoundTrip returned error: %v", err)
+		}
+		if response.Body != nil {
+			_ = response.Body.Close()
+		}
+		if response.StatusCode != http.StatusNoContent || response.Body != nil {
+			t.Fatalf("unexpected response: %#v", response)
+		}
+	})
+
+	t.Run("timeout round tripper cancels on error", func(t *testing.T) {
+		transport := timeoutRoundTripper{
+			base: serverRoundTripFunc(func(*http.Request) (*http.Response, error) {
+				return nil, context.Canceled
+			}),
+			timeout: time.Second,
+		}
+		request := httptest.NewRequest(http.MethodGet, "http://example.com", nil)
+
+		response, err := transport.RoundTrip(request)
+		if response != nil && response.Body != nil {
+			_ = response.Body.Close()
+		}
+		if err == nil {
+			t.Fatal("expected round trip error")
+		}
+	})
+
+	t.Run("timeout round tripper cancels response without body", func(t *testing.T) {
+		transport := timeoutRoundTripper{
+			base: serverRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusNoContent,
+					Header:     make(http.Header),
+					Request:    r,
+				}, nil
+			}),
+			timeout: time.Second,
+		}
+		request := httptest.NewRequest(http.MethodGet, "http://example.com", nil)
+
+		response, err := transport.RoundTrip(request)
+		if err != nil {
+			t.Fatalf("RoundTrip returned error: %v", err)
+		}
+		if response.Body != nil {
+			_ = response.Body.Close()
+		}
+		if response.StatusCode != http.StatusNoContent || response.Body != nil {
+			t.Fatalf("unexpected response: %#v", response)
+		}
+	})
+
+	t.Run("profile path and fallback defaults", func(t *testing.T) {
+		if isKibanaUserProfilePath("/api/status") {
+			t.Fatal("non-profile path should be false")
+		}
+		if isKibanaUserProfilePath("/s/team1") {
+			t.Fatal("space path without rest should be false")
+		}
+
+		response := &http.Response{
+			StatusCode: http.StatusNotFound,
+			Status:     "404 Not Found",
+			Header: http.Header{
+				"Content-Encoding": {"gzip"},
+				"Etag":             {`"old"`},
+			},
+			Body: io.NopCloser(strings.NewReader("missing")),
+		}
+
+		if err := writeKibanaUserProfileFallback(response, Session{}); err != nil {
+			t.Fatalf("writeKibanaUserProfileFallback returned error: %v", err)
+		}
+		if response.StatusCode != http.StatusOK || response.Header.Get("Content-Encoding") != "" || response.Header.Get("Etag") != "" {
+			t.Fatalf("unexpected fallback response metadata: status=%d headers=%#v", response.StatusCode, response.Header)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(response.Body).Decode(&body); err != nil {
+			t.Fatalf("decode fallback body: %v", err)
+		}
+		if body["uid"] != "elasticgateway-elasticgateway" {
+			t.Fatalf("unexpected fallback uid: %#v", body)
+		}
+	})
+}
+
+func TestIngestHelperErrorBranches(t *testing.T) {
+	t.Run("bulk body content length over limit", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/elasticgateway/ingest/orders/_bulk", strings.NewReader(testBulkBody()))
+		request.Header.Set("Content-Type", "application/x-ndjson")
+		request.ContentLength = 9
+
+		_, status, err := decodeBulkIngestDocumentsWithLimit(recorder, request, "orders", 8)
+		if status != http.StatusRequestEntityTooLarge || err == nil {
+			t.Fatalf("expected 413 content-length error, got status=%d err=%v", status, err)
+		}
+	})
+
+	t.Run("bulk source validation error", func(t *testing.T) {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/elasticgateway/ingest/orders/_bulk", strings.NewReader("{\"index\":{}}\n{}\n"))
+		request.Header.Set("Content-Type", "application/x-ndjson")
+
+		_, status, err := decodeBulkIngestDocumentsWithLimit(recorder, request, "orders", 1024)
+		if status != http.StatusBadRequest || err == nil || !strings.Contains(err.Error(), "event_time") {
+			t.Fatalf("expected event_time validation error, got status=%d err=%v", status, err)
+		}
+	})
+
+	t.Run("normalize generated alias too long", func(t *testing.T) {
+		indexName := strings.Repeat("a", ingest.MaxIndexNameBytes)
+		_, err := normalizeIngestDocument(indexName, map[string]any{"event_time": "2024-12-30T10:11:12Z"})
+		if err == nil || !strings.Contains(err.Error(), "Elasticsearch limits") {
+			t.Fatalf("expected generated alias length error, got %v", err)
+		}
+	})
+
+	t.Run("ingest denied unauthorized reason", func(t *testing.T) {
+		if got := ingestAuthorizationDenialReason(ldappkg.ErrUnauthorized); got != "no_authorized_groups" {
+			t.Fatalf("unexpected denial reason: %q", got)
+		}
+	})
+
+	t.Run("malformed basic auth requires credentials", func(t *testing.T) {
+		gateway := New(elasticpkg.NewClient(appconfig.Config{}), nil)
+		request := httptest.NewRequest(http.MethodPost, "/elasticgateway/ingest/orders", nil)
+		request.Header.Set("Authorization", "Basic nope")
+
+		username, access, err := gateway.ingestAccess(request)
+		if username != "" || access != nil || !errors.Is(err, errIngestAuthRequired) {
+			t.Fatalf("unexpected malformed auth result: username=%q access=%#v err=%v", username, access, err)
+		}
+	})
+}
+
+type serverRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f serverRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+func newAuthorizedBulkTestGateway(cfg appconfig.Config) *Gateway {
+	return New(elasticpkg.NewClient(cfg), func(username, _ string) (*authz.User, []authz.Access, error) {
+		return &authz.User{Name: username}, []authz.Access{
+			{Group: "team1_ingest", Namespace: "team1"},
+		}, nil
+	})
+}
+
+func newAuthorizedBulkRequest() *http.Request {
+	request := httptest.NewRequest(http.MethodPost, "/elasticgateway/ingest/team1-demo/_bulk", strings.NewReader(testBulkBody()))
+	request.Header.Set("Content-Type", "application/x-ndjson")
+	request.SetBasicAuth("alice", "secret")
+	return request
+}
+
+func testBulkBody() string {
+	return "{\"index\":{}}\n{\"event_time\":\"2024-12-30T10:11:12Z\",\"message\":\"hello\"}\n"
 }
 
 func testJSONLogger(output *bytes.Buffer) *slog.Logger {

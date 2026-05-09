@@ -35,6 +35,30 @@ func TestDefaultHTTPClient(t *testing.T) {
 	}
 }
 
+func TestDefaultHTTPClientReturnsErrorTransportForInvalidRootCA(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "root-ca.txt")
+	if err := os.WriteFile(path, []byte("not a certificate"), 0o600); err != nil {
+		t.Fatalf("write invalid root CA: %v", err)
+	}
+	t.Setenv("ROOT_CA", path)
+
+	client := DefaultHTTPClient()
+	if client.Timeout != DefaultHTTPClientTimeout {
+		t.Fatalf("unexpected timeout: %v", client.Timeout)
+	}
+
+	resp, err := client.Get("http://example.com")
+	if resp != nil {
+		_ = resp.Body.Close()
+	}
+	if err == nil {
+		t.Fatal("expected invalid ROOT_CA error from fallback transport")
+	}
+	if !strings.Contains(err.Error(), "ROOT_CA") {
+		t.Fatalf("expected ROOT_CA error, got %v", err)
+	}
+}
+
 func TestWithDefaultHTTPClientTimeoutAddsTimeoutWithoutMutatingInput(t *testing.T) {
 	input := &http.Client{}
 

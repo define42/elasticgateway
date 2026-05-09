@@ -206,3 +206,109 @@ func TestKibanaAPIPath(t *testing.T) {
 		t.Fatalf("unexpected kibana path: %q", got)
 	}
 }
+
+func TestKibanaAPIPathForSpaceBranches(t *testing.T) {
+	t.Parallel()
+
+	if got := KibanaAPIPathForSpace(" ", "api/test"); got != "/api/test" {
+		t.Fatalf("blank space should not prefix path, got %q", got)
+	}
+	if got := KibanaAPIPathForSpace("team1", "/s/existing/api/test"); got != "/s/existing/api/test" {
+		t.Fatalf("space-prefixed path should be preserved, got %q", got)
+	}
+	if got := KibanaAPIPathForSpace("team 1", "api/test"); got != "/s/team%201/api/test" {
+		t.Fatalf("space should be escaped, got %q", got)
+	}
+}
+
+//nolint:cyclop,funlen,gocognit // Subtests exercise related Kibana client error branches together.
+func TestKibanaClientErrorBranches(t *testing.T) {
+	t.Run("create missing space conflict confirm failure", func(t *testing.T) {
+		var calls []string
+		kibana := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls = append(calls, r.Method+" "+r.URL.Path)
+			switch r.Method + " " + r.URL.Path {
+			case "POST /api/spaces/space":
+				http.Error(w, `{"error":"conflict"}`, http.StatusConflict)
+			case "GET /api/spaces/space/orders":
+				http.Error(w, `{"error":"confirm failed"}`, http.StatusInternalServerError)
+			default:
+				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			}
+		}))
+		defer kibana.Close()
+
+		client := NewClient(config.Config{KibanaURL: kibana.URL, HTTPClient: kibana.Client()})
+		err := client.createMissingSpace(context.Background(), "orders", "/api/spaces/space/orders")
+		if err == nil || !strings.Contains(err.Error(), "confirm Kibana space") {
+			t.Fatalf("expected conflict confirmation error, got %v", err)
+		}
+		if !reflect.DeepEqual(calls, []string{"POST /api/spaces/space", "GET /api/spaces/space/orders"}) {
+			t.Fatalf("unexpected calls: %#v", calls)
+		}
+	})
+
+	t.Run("ensure data view lookup failure", func(t *testing.T) {
+		kibana := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodGet || r.URL.Path != "/s/orders/api/data_views/data_view/"+BuildDataViewID("orders") {
+				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			}
+			http.Error(w, `{"error":"lookup failed"}`, http.StatusInternalServerError)
+		}))
+		defer kibana.Close()
+
+		client := NewClient(config.Config{KibanaURL: kibana.URL, HTTPClient: kibana.Client()})
+		err := client.ensureDataView(context.Background(), "orders", BuildDataViewID("orders"), "orders")
+		if err == nil || !strings.Contains(err.Error(), "status=500") {
+			t.Fatalf("expected lookup error, got %v", err)
+		}
+	})
+
+	t.Run("ensure data view create failure", func(t *testing.T) {
+		var calls []string
+		kibana := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls = append(calls, r.Method+" "+r.URL.Path)
+			switch r.Method + " " + r.URL.Path {
+			case "GET /s/orders/api/data_views/data_view/" + BuildDataViewID("orders"):
+				http.NotFound(w, r)
+			case "POST /s/orders/api/data_views/data_view":
+				http.Error(w, `{"error":"create failed"}`, http.StatusInternalServerError)
+			default:
+				t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+			}
+		}))
+		defer kibana.Close()
+
+		client := NewClient(config.Config{KibanaURL: kibana.URL, HTTPClient: kibana.Client()})
+		err := client.ensureDataView(context.Background(), "orders", BuildDataViewID("orders"), "orders")
+		if err == nil || !strings.Contains(err.Error(), "status=500") {
+			t.Fatalf("expected create error, got %v", err)
+		}
+		if !reflect.DeepEqual(calls, []string{
+			"GET /s/orders/api/data_views/data_view/" + BuildDataViewID("orders"),
+			"POST /s/orders/api/data_views/data_view",
+		}) {
+			t.Fatalf("unexpected calls: %#v", calls)
+		}
+	})
+
+	t.Run("default data view not found and failure", func(t *testing.T) {
+		status := http.StatusNotFound
+		kibana := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			http.Error(w, `{"error":"default failed"}`, status)
+		}))
+		defer kibana.Close()
+
+		client := NewClient(config.Config{KibanaURL: kibana.URL, HTTPClient: kibana.Client()})
+		value, ok, err := client.KibanaDefaultDataView(context.Background(), "orders")
+		if err != nil || ok || value != "" {
+			t.Fatalf("404 should return missing default without error, value=%q ok=%v err=%v", value, ok, err)
+		}
+
+		status = http.StatusInternalServerError
+		_, _, err = client.KibanaDefaultDataView(context.Background(), "orders")
+		if err == nil || !strings.Contains(err.Error(), "get Kibana default data view") {
+			t.Fatalf("expected default data view error, got %v", err)
+		}
+	})
+}

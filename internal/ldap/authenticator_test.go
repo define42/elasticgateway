@@ -115,6 +115,60 @@ func TestLDAPTLSConfigSkipVerifyWinsOverRootCA(t *testing.T) {
 	}
 }
 
+func TestMailForUsername(t *testing.T) {
+	t.Parallel()
+
+	if got := New(config.LDAPConfig{UserMailDomain: "example.com"}).mailForUsername("alice"); got != "alice@example.com" {
+		t.Fatalf("unexpected domain-qualified mail: %q", got)
+	}
+	if got := New(config.LDAPConfig{UserMailDomain: "@example.com"}).mailForUsername("alice"); got != "alice@example.com" {
+		t.Fatalf("unexpected at-domain-qualified mail: %q", got)
+	}
+	if got := New(config.LDAPConfig{UserMailDomain: "example.com"}).mailForUsername("alice@other.example"); got != "alice@other.example" {
+		t.Fatalf("username with mail domain should be preserved, got %q", got)
+	}
+	if got := New(config.LDAPConfig{}).mailForUsername("alice"); got != "alice" {
+		t.Fatalf("username should be preserved without configured mail domain, got %q", got)
+	}
+}
+
+func TestLDAPServerNameInvalidURL(t *testing.T) {
+	t.Parallel()
+
+	if got := ldapServerName("://bad"); got != "" {
+		t.Fatalf("invalid LDAP URL should have empty server name, got %q", got)
+	}
+}
+
+func TestGroupNameFromDNBranches(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]string{
+		"ou=team1,dc=example,dc=com":  "team1",
+		"uid=team1,dc=example,dc=com": "uid=team1,dc=example,dc=com",
+	}
+
+	for dn, want := range tests {
+		if got := GroupNameFromDN(dn); got != want {
+			t.Fatalf("GroupNameFromDN(%q) = %q, want %q", dn, got, want)
+		}
+	}
+}
+
+func TestAccessFromGroupsSkipsUnmanagedAndUnknownGroups(t *testing.T) {
+	t.Parallel()
+
+	access, user := AccessFromGroups("alice", []string{
+		"cn=other_team1_user,ou=groups,dc=example,dc=com",
+		"cn=app_elk_team1_viewer,ou=groups,dc=example,dc=com",
+		"cn=app_elk_team1_ingest,ou=groups,dc=example,dc=com",
+	}, "app_elk_")
+
+	if len(access) != 1 || access[0].Namespace != "team1" || user == nil || user.Namespace != "team1" {
+		t.Fatalf("unexpected access/user after skipping groups: access=%#v user=%#v", access, user)
+	}
+}
+
 func writeRootCAPEMFile(t *testing.T) string {
 	t.Helper()
 

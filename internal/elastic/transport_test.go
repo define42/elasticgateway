@@ -91,3 +91,11 @@ func TestNewClientAddsDefaultTimeoutToInjectedHTTPClient(t *testing.T) {
 		t.Fatalf("input client was mutated: %v", input.Timeout)
 	}
 }
+
+func TestPingKibanaSkipsEmptyURL(t *testing.T) {
+	client := NewClient(config.Config{KibanaURL: " "})
+
+	if err := client.PingKibana(context.Background()); err != nil {
+		t.Fatalf("PingKibana with empty URL returned error: %v", err)
+	}
+}
