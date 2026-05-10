@@ -5,8 +5,11 @@
 [![Build Status](https://github.com/define42/elasticgateway/actions/workflows/build.yml/badge.svg)](https://github.com/define42/elasticgateway/actions/)
 
 ElasticGateway is a compliance-oriented namespace and ingest gateway for self-managed Elastic Stack Basic/free.
-It turns LDAP group membership into Elasticsearch native users, Elastic roles, Kibana spaces, Kibana data views, and namespace-scoped ingest permissions.
-Roles and Kibana spaces are derived from LDAP group attributes and re-applied on every login.
+It lets teams share one Elastic cluster without giving every user broad cluster access, and keeps administration simple through predictable LDAP group naming rules.
+
+The gateway sits in front of Kibana and a controlled ingest API, using LDAP as the source of truth for who can see, write, and administer each namespace.
+On each login, it translates matching LDAP groups into the Elastic resources that user needs: native Elasticsearch users, security roles, Kibana spaces, data views, and namespace-scoped ingest permissions.
+Because access is derived from simple suffixes like `_user`, `_ingest`, and `_admin` and re-applied on every login, permissions stay auditable and easy to operate instead of drifting into hand-managed Elastic configuration.
 
 ## Access Model
 
