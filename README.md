@@ -5,8 +5,8 @@
 [![Build Status](https://github.com/define42/elasticgateway/actions/workflows/build.yml/badge.svg)](https://github.com/define42/elasticgateway/actions/)
 
 ElasticGateway is a compliance-oriented namespace and ingest gateway for self-managed Elastic Stack Basic/free.
-It turns LDAP group membership into Elasticsearch native users, Elastic roles, Kibana Spaces, Kibana data views, and namespace-scoped ingest permissions.
-
+It turns LDAP group membership into Elasticsearch native users, Elastic roles, Kibana spaces, Kibana data views, and namespace-scoped ingest permissions.
+Roles and Kibana spaces are derived from LDAP group attributes and re-applied on every login.
 
 ## Access Model
 
@@ -44,7 +44,7 @@ POST /elasticgateway/ingest/<namespace>-<index>/_bulk
 The namespace prefix is the authorization boundary.
 The gateway accepts an ingest request only when the authenticated user has write-capable LDAP access for the namespace at the front of the path.
 
-Every document must contain a top-level UTC `event_time`.
+Every document must contain a top-level `event_time` that is an RFC3339 timestamp ending in `Z` (UTC); offsets such as `+00:00` are rejected.
 That timestamp controls the daily rollover alias:
 
 ```text
@@ -78,7 +78,7 @@ One bulk request can therefore write to multiple daily rollover aliases, and the
 
 At startup, the gateway bootstraps shared Elasticsearch resources:
 
-- ILM policy `generic-rollover-100m`
+- ILM policy `generic-rollover-100m`, which rolls each backing index over at 100,000,000 documents
 - index template `gateway-rollover-template`
 - template index pattern `*-*-rollover-*`
 - `event_time` mapping as an Elasticsearch `date`
@@ -133,7 +133,7 @@ Configuration is environment based.
 | `TRUSTED_PROXIES` | empty | Comma- or space-separated proxy IPs/CIDRs allowed to supply `X-Forwarded-For`; unset ignores inbound `X-Forwarded-For` |
 | `INDEX_SHARDS` | `1` | Primary shard count for gateway-managed rollover backing indices. Must be at least `1` |
 | `INDEX_REPLICAS` | `1` | Replica count for gateway-managed rollover backing indices. May be `0` for single-node clusters |
-| `LDAP_URL` | `ldaps://ldap:389` | LDAP server URL |
+| `LDAP_URL` | `ldaps://ldap:389` | LDAP server URL. The default points at the bundled GLAuth service, which serves TLS on port `389`; most directories use `636` for `ldaps://` |
 | `LDAP_BASE_DN` | `dc=glauth,dc=com` | LDAP search base |
 | `LDAP_USER_FILTER` | `(mail=%s)` | User lookup filter; `%s` receives the login email |
 | `LDAP_GROUP_ATTRIBUTE` | `memberOf` | Attribute containing group memberships |
@@ -270,3 +270,5 @@ Repository layout:
 
 - Kibana resource setup is synchronous; failed space or data-view creation fails the ingest before writing the document.
 - The service is built for namespace-prefixed index families, not arbitrary Elasticsearch indexing.
+- Group membership is not cached; every login re-queries LDAP and re-provisions the user's spaces, roles, and native user.
+- Ingest authentication is HTTP Basic (LDAP credentials) or a gateway session cookie only; there is no API token mechanism.
