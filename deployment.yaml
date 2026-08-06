@@ -1,0 +1,367 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: elasticgateway
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: elasticgateway-secrets
+  namespace: elasticgateway
+type: Opaque
+stringData:
+  ELASTIC_PASSWORD: "Cedar7!FluxOrbit29"
+  SESSION_SECRET: "local-dev-session-secret-change-me-32"
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ldap-config
+  namespace: elasticgateway
+data:
+  config.cfg: |
+    debug = true
+
+    [ldap]
+      enabled = true
+      listen = "0.0.0.0:389"
+
+    [backend]
+      datastore = "config"
+      baseDN = "dc=glauth,dc=com"
+      nameformat = "cn"
+      groupformat = "ou"
+
+    [behaviors]
+      IgnoreCapabilities = true
+
+    [[users]]
+      name = "johndoe"
+      primarygroup = 5510
+      othergroups = [5510, 5560]
+      mail = "johndoe@example.com"
+      passsha256 = "6478579e37aff45f013e14eeb30b3cc56c72ccdc310123bcdf53e0333e3f416a"
+      [[users.capabilities]]
+      action = "search"
+      object = "*"
+
+    [[users]]
+      name = "ingestuser"
+      primarygroup = 5550
+      othergroups = [5550]
+      mail = "ingestuser@example.com"
+      passsha256 = "6478579e37aff45f013e14eeb30b3cc56c72ccdc310123bcdf53e0333e3f416a"
+      [[users.capabilities]]
+      action = "search"
+      object = "*"
+
+    [[users]]
+      name = "testuser"
+      primarygroup = 5505
+      othergroups = [5506, 5510, 5511]
+      mail = "testuser@example.com"
+      passsha256 = "6478579e37aff45f013e14eeb30b3cc56c72ccdc310123bcdf53e0333e3f416a"
+      [[users.capabilities]]
+      action = "search"
+      object = "*"
+
+    [[users]]
+      name = "serviceuser"
+      primarygroup = 5502
+      othergroups = [5503]
+      mail = "serviceuser@example.com"
+      passsha256 = "652c7dc687d98c9889304ed2e408c74b611e86a40caa51c4b43f1dd5913c5cd0"
+      [[users.capabilities]]
+      action = "search"
+      object = "*"
+
+    [[groups]]
+      name = "superheros"
+      gidnumber = 5501
+
+    [[groups]]
+      name = "svcaccts"
+      gidnumber = 5502
+
+    [[groups]]
+      name = "team1"
+      gidnumber = 5503
+
+    [[groups]]
+      name = "team2"
+      gidnumber = 5504
+
+    [[groups]]
+      name = "skod"
+      gidnumber = 5507
+
+    [[groups]]
+      name = "app_elk_team1_admin"
+      gidnumber = 5505
+
+    [[groups]]
+      name = "app_elk_team2_ingest"
+      gidnumber = 5506
+
+    [[groups]]
+      name = "app_elk_team10_user"
+      gidnumber = 5510
+
+    [[groups]]
+      name = "app_elk_team10_ingest"
+      gidnumber = 5550
+
+    [[groups]]
+      name = "app_elk_team1_user"
+      gidnumber = 5560
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: elasticsearch-data
+  namespace: elasticgateway
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: elasticsearch
+  namespace: elasticgateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: elasticsearch
+  template:
+    metadata:
+      labels:
+        app: elasticsearch
+    spec:
+      containers:
+        - name: elasticsearch
+          image: docker.elastic.co/elasticsearch/elasticsearch:9.3.4
+          ports:
+            - containerPort: 9200
+          env:
+            - name: discovery.type
+              value: single-node
+            - name: bootstrap.memory_lock
+              value: "true"
+            - name: xpack.security.enabled
+              value: "true"
+            - name: xpack.security.http.ssl.enabled
+              value: "false"
+            - name: xpack.license.self_generated.type
+              value: basic
+            - name: ELASTIC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: elasticgateway-secrets
+                  key: ELASTIC_PASSWORD
+            - name: ES_JAVA_OPTS
+              value: -Xms512m -Xmx512m
+          volumeMounts:
+            - name: elasticsearch-data
+              mountPath: /usr/share/elasticsearch/data
+      volumes:
+        - name: elasticsearch-data
+          persistentVolumeClaim:
+            claimName: elasticsearch-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: elasticsearch
+  namespace: elasticgateway
+spec:
+  selector:
+    app: elasticsearch
+  ports:
+    - name: http
+      port: 9200
+      targetPort: 9200
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kibana
+  namespace: elasticgateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kibana
+  template:
+    metadata:
+      labels:
+        app: kibana
+    spec:
+      containers:
+        - name: kibana
+          image: docker.elastic.co/kibana/kibana:9.3.4
+          ports:
+            - containerPort: 5601
+          env:
+            - name: SERVER_NAME
+              value: kibana
+            - name: ELASTICSEARCH_HOSTS
+              value: http://elasticsearch:9200
+            - name: ELASTICSEARCH_USERNAME
+              value: elastic
+            - name: ELASTICSEARCH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: elasticgateway-secrets
+                  key: ELASTIC_PASSWORD
+            - name: XPACK_SECURITY_ENCRYPTIONKEY
+              value: 0123456789abcdef0123456789abcdef
+            - name: XPACK_ENCRYPTEDSAVEDOBJECTS_ENCRYPTIONKEY
+              value: abcdef0123456789abcdef0123456789
+            - name: XPACK_REPORTING_ENCRYPTIONKEY
+              value: fedcba9876543210fedcba9876543210
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kibana
+  namespace: elasticgateway
+spec:
+  selector:
+    app: kibana
+  ports:
+    - name: http
+      port: 5601
+      targetPort: 5601
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ldap
+  namespace: elasticgateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: ldap
+  template:
+    metadata:
+      labels:
+        app: ldap
+    spec:
+      containers:
+        - name: ldap
+          image: glauth/glauth:latest
+          args:
+            - "-c"
+            - "/app/config/config.cfg"
+          ports:
+            - containerPort: 389
+          volumeMounts:
+            - name: ldap-config
+              mountPath: /app/config/config.cfg
+              subPath: config.cfg
+      volumes:
+        - name: ldap-config
+          configMap:
+            name: ldap-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ldap
+  namespace: elasticgateway
+spec:
+  selector:
+    app: ldap
+  ports:
+    - name: ldap
+      port: 389
+      targetPort: 389
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: elasticgateway
+  namespace: elasticgateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: elasticgateway
+  template:
+    metadata:
+      labels:
+        app: elasticgateway
+    spec:
+      containers:
+        - name: elasticgateway
+          image: ghcr.io/define42/elasticgateway:latest
+          ports:
+            - containerPort: 8080
+          env:
+            - name: ELASTICSEARCH_URL
+              value: http://elasticsearch:9200
+            - name: ELASTICSEARCH_USERNAME
+              value: elastic
+            - name: ELASTICSEARCH_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: elasticgateway-secrets
+                  key: ELASTIC_PASSWORD
+            - name: ELASTICSEARCH_SKIP_TLS_VERIFY
+              value: "false"
+            - name: KIBANA_URL
+              value: http://kibana:5601
+            - name: KIBANA_USERNAME
+              value: elastic
+            - name: KIBANA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: elasticgateway-secrets
+                  key: ELASTIC_PASSWORD
+            - name: LDAP_URL
+              value: ldap://ldap:389
+            - name: LDAP_BASE_DN
+              value: dc=glauth,dc=com
+            - name: LDAP_USER_FILTER
+              value: (mail=%s)
+            - name: LDAP_GROUP_ATTRIBUTE
+              value: memberOf
+            - name: LDAP_GROUP_PREFIX
+              value: app_elk_
+            - name: LDAP_USER_DOMAIN
+              value: "@example.com"
+            - name: LDAP_STARTTLS
+              value: "false"
+            - name: LDAP_SKIP_TLS_VERIFY
+              value: "false"
+            - name: SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: elasticgateway-secrets
+                  key: SESSION_SECRET
+            - name: LISTEN_ADDR
+              value: ":8080"
+            - name: INDEX_SHARDS
+              value: "1"
+            - name: INDEX_REPLICAS
+              value: "1"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: elasticgateway
+  namespace: elasticgateway
+spec:
+  type: NodePort
+  selector:
+    app: elasticgateway
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
